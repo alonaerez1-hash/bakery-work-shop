@@ -1,10 +1,10 @@
 {
-  "name": "Bakery OS — ניהול עסק אפייה",
-  "short_name": "Bakery OS",
+  "name": "Bakery Workspace — Luxury Bakery Studio",
+  "short_name": "Bakery Workspace",
   "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "#f7f0e6",
-  "theme_color": "#2a160d",
+  "background_color": "#f7efe4",
+  "theme_color": "#2b1712",
   "lang": "he",
   "dir": "rtl",
   "icons": []
