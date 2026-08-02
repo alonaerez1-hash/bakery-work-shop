@@ -1,0 +1,11 @@
+{
+  "name": "Bakery OS — ניהול עסק אפייה",
+  "short_name": "Bakery OS",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f7f0e6",
+  "theme_color": "#2a160d",
+  "lang": "he",
+  "dir": "rtl",
+  "icons": []
+}
