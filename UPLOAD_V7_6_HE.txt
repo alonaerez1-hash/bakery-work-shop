@@ -1,0 +1,13 @@
+Bakery Workspace v7.6
+
+תיקון: הכפתור ״פתיחת תכנון השבוע״ מעביר ישירות ללשונית ״תכנון שבועי״, מציג את השבוע הנוכחי וגולל את הלשונית הפעילה למרכז.
+
+העלי ל-GitHub את ששת הקבצים:
+index.html
+app.js
+styles.css
+sw.js
+manifest.json
+pako_inflate.min.js
+
+לאחר ההעלאה פתחי: https://alonaerez1-hash.github.io/bakery-work-shop/?v=760
