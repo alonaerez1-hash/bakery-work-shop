@@ -449,6 +449,6 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>go(b.dataset.
 document.getElementById('modalClose').onclick=close;document.getElementById('modal').onclick=e=>{if(e.target.id==='modal')close()};document.getElementById('backupBtn').onclick=exportData;document.getElementById('cloudBtn').onclick=()=>go('settings');
 document.getElementById('importFile').onchange=e=>{if(e.target.files[0])importData(e.target.files[0]);e.target.value=''};document.getElementById('ramiImportFile').onchange=e=>{if(e.target.files[0])importRamiFile(e.target.files[0]);e.target.value=''};
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&cloud.user)pullCloud(false)});window.addEventListener('focus',()=>{if(cloud.user)pullCloud(false)});window.addEventListener('online',()=>{if(cloud.user)pullCloud(false)});
-if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').then(r=>r.update()).catch(()=>{}));
+if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=730').then(r=>r.update()).catch(()=>{}));
 initSession().finally(render);
 })();

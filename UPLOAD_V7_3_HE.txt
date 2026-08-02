@@ -1,0 +1,20 @@
+עדכון כפוי Bakery Workspace v7.3
+
+הבעיה שנמצאה: בריפו היו קבצים מגרסאות שונות. styles.css היה חדש, אבל index.html, app.js ו-sw.js נשארו מהגרסה הישנה. לכן האתר הציג כמעט את העיצוב הישן.
+
+העלאה נכונה ל-GitHub:
+1. חלצי את קובץ ה-ZIP במחשב.
+2. בתוך התיקייה תראי 6 קבצים.
+3. בריפו bakery-work-shop לחצי Add file > Upload files.
+4. גררי את ששת הקבצים עצמם, לא את קובץ ה-ZIP.
+5. ודאי ש-GitHub מציג הודעת החלפה עבור index.html, app.js, styles.css, sw.js ו-manifest.json, וש-pako_inflate.min.js נוסף.
+6. לחצי Commit changes.
+7. המתיני כשתי דקות ופתחי: https://alonaerez1-hash.github.io/bakery-work-shop/?v=730
+
+הקבצים:
+index.html
+app.js
+styles.css
+sw.js
+manifest.json
+pako_inflate.min.js
