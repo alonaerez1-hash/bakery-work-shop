@@ -759,6 +759,49 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>go(b.dataset.
 document.getElementById('modalClose').onclick=close;document.getElementById('modal').onclick=e=>{if(e.target.id==='modal')close()};document.getElementById('backupBtn').onclick=exportData;document.getElementById('cloudBtn').onclick=()=>go('settings');
 document.getElementById('importFile').onchange=e=>{if(e.target.files[0])importData(e.target.files[0]);e.target.value=''};document.getElementById('ramiImportFile').onchange=e=>{if(e.target.files[0])importRamiFile(e.target.files[0]);e.target.value=''};
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&cloud.user)pullCloud(false)});window.addEventListener('focus',()=>{if(cloud.user)pullCloud(false)});window.addEventListener('online',()=>{if(cloud.user)pullCloud(false)});
-if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=830').then(r=>r.update()).catch(()=>{}));
+function showAppUpdate(registration){
+  if(document.getElementById('appUpdateBanner'))return;
+  const banner=document.createElement('div');
+  banner.id='appUpdateBanner';banner.className='app-update-banner';
+  banner.innerHTML='<div><strong>זמינה גרסה חדשה</strong><span>לחצי לעדכון. הנתונים שלך יישמרו.</span></div><button type="button">עדכון עכשיו</button>';
+  banner.querySelector('button').onclick=()=>{
+    banner.classList.add('is-updating');
+    banner.querySelector('button').textContent='מעדכנת…';
+    if(registration.waiting)registration.waiting.postMessage({type:'SKIP_WAITING'});
+    else registration.update().catch(()=>{});
+  };
+  document.body.appendChild(banner);
+}
+function initServiceWorkerUpdates(){
+  if(!('serviceWorker'in navigator))return;
+  let refreshing=false,registrationRef=null;
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{
+    if(refreshing)return;refreshing=true;
+    window.location.reload();
+  });
+  const inspect=registration=>{
+    registrationRef=registration;
+    if(registration.waiting&&navigator.serviceWorker.controller)showAppUpdate(registration);
+    registration.addEventListener('updatefound',()=>{
+      const worker=registration.installing;if(!worker)return;
+      worker.addEventListener('statechange',()=>{
+        if(worker.state==='installed'&&navigator.serviceWorker.controller)showAppUpdate(registration);
+      });
+    });
+  };
+  window.addEventListener('load',async()=>{
+    try{
+      const registration=await navigator.serviceWorker.register('./sw.js?v=850',{updateViaCache:'none'});
+      inspect(registration);
+      await registration.update();
+      const check=()=>registrationRef?.update().catch(()=>{});
+      document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')check()});
+      window.addEventListener('focus',check);
+      window.addEventListener('online',check);
+      setInterval(check,30*60*1000);
+    }catch(error){console.warn('Service worker update check failed',error)}
+  });
+}
+initServiceWorkerUpdates();
 initTabOrder();initSession().finally(render);
 })();

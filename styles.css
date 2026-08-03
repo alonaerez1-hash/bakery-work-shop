@@ -138,3 +138,7 @@ main{padding:10px 0 50px}.view{display:none;animation:fade .25s ease}.view.activ
   .top-actions{width:min(212px,100%)!important;}
   .top-actions .btn{font-size:12px!important;height:38px!important;}
 }
+
+
+.app-update-banner{position:fixed;left:50%;bottom:max(18px,calc(env(safe-area-inset-bottom) + 12px));transform:translateX(-50%);z-index:1000;width:min(520px,calc(100% - 24px));display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 14px;border-radius:16px;background:rgba(43,23,18,.97);color:#fff7e9;box-shadow:0 18px 48px rgba(43,23,18,.30);border:1px solid rgba(255,255,255,.14);animation:updateFadeIn .28s ease both}.app-update-banner strong{display:block;font-size:14px}.app-update-banner span{display:block;margin-top:2px;font-size:12px;color:#ead9cb}.app-update-banner button{flex:0 0 auto;border:0;border-radius:11px;padding:9px 13px;background:#d8b06d;color:#342018;font-weight:800;cursor:pointer}.app-update-banner.is-updating button{opacity:.65;pointer-events:none}@keyframes updateFadeIn{from{opacity:0;transform:translate(-50%,10px)}to{opacity:1;transform:translate(-50%,0)}}
+@media(max-width:760px){.app-update-banner{bottom:max(12px,calc(env(safe-area-inset-bottom) + 8px));align-items:flex-start}.app-update-banner button{padding:9px 11px}}
