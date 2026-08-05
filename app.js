@@ -457,24 +457,31 @@ function updateTabScrollButtons(){
   const shell=info.tabs.closest('.tabs-shell');
   const left=shell?.querySelector('.tabs-scroll-left');
   const right=shell?.querySelector('.tabs-scroll-right');
-  const fully=info.visible.filter(x=>x.visible);
-  const partly=info.visible.filter(x=>x.partial);
-  const first=(fully[0]||partly[0])?.index??0;
-  const last=(fully.at(-1)||partly.at(-1))?.index??0;
-  if(left)left.disabled=last>=info.buttons.length-1;
-  if(right)right.disabled=first<=0;
+  const box=info.tabs.getBoundingClientRect();
+  const tolerance=3;
+  const hiddenLeft=info.buttons.some(button=>button.getBoundingClientRect().left<box.left-tolerance);
+  const hiddenRight=info.buttons.some(button=>button.getBoundingClientRect().right>box.right+tolerance);
+  if(left)left.disabled=!hiddenLeft;
+  if(right)right.disabled=!hiddenRight;
 }
 function scrollTabs(direction){
   const info=tabVisibility();
   if(!info)return;
-  const fully=info.visible.filter(x=>x.visible);
-  const partly=info.visible.filter(x=>x.partial);
-  const first=(fully[0]||partly[0])?.index??0;
-  const last=(fully.at(-1)||partly.at(-1))?.index??0;
-  const movingLeft=direction==='left';
-  const targetIndex=movingLeft?Math.min(info.buttons.length-1,last+3):Math.max(0,first-3);
-  info.buttons[targetIndex]?.scrollIntoView({behavior:'smooth',block:'nearest',inline:'center'});
-  setTimeout(updateTabScrollButtons,380);
+  const box=info.tabs.getBoundingClientRect();
+  const tolerance=3;
+  let candidates;
+  if(direction==='left'){
+    candidates=info.buttons
+      .filter(button=>button.getBoundingClientRect().left<box.left-tolerance)
+      .sort((a,b)=>b.getBoundingClientRect().right-a.getBoundingClientRect().right);
+  }else{
+    candidates=info.buttons
+      .filter(button=>button.getBoundingClientRect().right>box.right+tolerance)
+      .sort((a,b)=>a.getBoundingClientRect().left-b.getBoundingClientRect().left);
+  }
+  const target=candidates[0];
+  if(target)target.scrollIntoView({behavior:'smooth',block:'nearest',inline:'center'});
+  setTimeout(updateTabScrollButtons,450);
 }
 function initTabOrder(){const tabs=document.getElementById('tabs'),order=state.settings.tabOrder||[];if(!tabs||!order.length)return;const map=new Map([...tabs.querySelectorAll('button[data-view]')].map(b=>[b.dataset.view,b]));order.forEach(v=>{if(map.has(v))tabs.appendChild(map.get(v))});}
 function tabOrderEditor(){const tabs=[...document.querySelectorAll('#tabs button[data-view]')];modal('סידור לשוניות',`<div class="notice">גררי את השורות לסדר הרצוי. הסדר יישמר במכשיר ובענן.</div><div id="tabOrderList" class="tab-order-list">${tabs.map(b=>`<div class="tab-order-item" draggable="true" data-view="${b.dataset.view}"><span>⋮⋮</span><strong>${esc(b.textContent.trim())}</strong></div>`).join('')}</div><div class="actions"><button class="btn" onclick="App.saveTabOrder()">שמירה</button><button class="btn ghost" onclick="App.resetTabOrder()">איפוס</button></div>`);let drag=null;document.querySelectorAll('.tab-order-item').forEach(el=>{el.ondragstart=()=>drag=el;el.ondragover=e=>{e.preventDefault();const r=el.getBoundingClientRect();el.parentElement.insertBefore(drag,e.clientY<r.top+r.height/2?el:el.nextSibling)}})}
@@ -732,6 +739,70 @@ function updateRecipeEditorSummary(){
 
 
 function setRecipeCategory(category,button){document.querySelectorAll('.recipe-filter-pills button').forEach(b=>b.classList.toggle('active',b===button));filterRecipeCards()}
+
+function ingredientRow(i={},isSub=false){
+  const unit=normalizedRecipeUnit(i.unit||'גרם');
+  return `<div class="ingredient-row">
+    <div class="field"><label>רכיב</label><input class="ri-n" value="${esc(i.name||'')}" placeholder="שם הרכיב"></div>
+    <div class="field"><label>כמות</label><input class="ri-q" type="number" min="0" step="0.01" value="${Number(i.qty||0)}" onblur="App.roundIngredientInput(this)"></div>
+    <div class="field"><label>יחידה</label><select class="ri-u" onchange="App.syncIngredientUnit(this)">${['גרם','ק״ג','מ״ל','ליטר','כפית','כף','כוס','יחידה'].map(u=>`<option value="${u}" ${unit===u?'selected':''}>${u}</option>`).join('')}</select></div>
+    <div class="field"><label>קטגוריה</label><select class="ri-c">${['יבשים','רטובים','שומנים','תוספות','אחר'].map(c=>`<option value="${c}" ${(i.category||'אחר')===c?'selected':''}>${c}</option>`).join('')}</select></div>
+    <input class="ri-link" type="hidden" value="${esc(i.linkedSubRecipeId||'')}">
+    <button type="button" class="btn small danger" onclick="this.closest('.ingredient-row').remove();App.updateRecipeWeightPreview()">הסרה</button>
+  </div>`;
+}
+function stepRow(s={},isSub=false){
+  return `<div class="step-row">
+    <div class="field"><label>שלב</label><input class="rs-t" value="${esc(s.text||'')}" placeholder="מה עושים?"></div>
+    <div class="field"><label>ימים לפני מסירה</label><input class="rs-d" type="number" min="0" step="1" value="${Number(s.daysBefore||0)}"></div>
+    <div class="field"><label>שעה מועדפת</label><input class="rs-h" type="time" value="${esc(s.time||'')}"></div>
+    <div class="field"><label>משך בדקות</label><input class="rs-m" type="number" min="0" step="5" value="${Number(s.durationMin||0)}"></div>
+    <button type="button" class="btn small danger" onclick="this.closest('.step-row').remove()">הסרה</button>
+  </div>`;
+}
+function recipeOrderTaskRow(t={}){
+  return `<div class="recipe-order-task-row step-row">
+    <div class="field"><label>משימה</label><input class="rot-title" value="${esc(t.title||t.text||'')}" placeholder="למשל: להכין בצק"></div>
+    <div class="field"><label>ימים לפני המסירה</label><input class="rot-days" type="number" min="0" step="1" value="${Number(t.daysBefore||0)}"></div>
+    <div class="field"><label>משך פעיל בדקות</label><input class="rot-min" type="number" min="0" step="5" value="${Number(t.activeMin||t.durationMin||20)}"></div>
+    <div class="field"><label>שעה מועדפת</label><input class="rot-time" type="time" value="${esc(t.preferredTime||t.time||'')}"></div>
+    <div class="field"><label>הערות</label><input class="rot-notes" value="${esc(t.notes||'')}"></div>
+    <button type="button" class="btn small danger" onclick="this.closest('.recipe-order-task-row').remove()">הסרה</button>
+  </div>`;
+}
+function readRecipeOrderTasks(){
+  const box=document.getElementById('recipeOrderTasks');
+  if(!box)return[];
+  return [...box.querySelectorAll('.recipe-order-task-row')].map(row=>({
+    title:row.querySelector('.rot-title')?.value.trim()||'',
+    daysBefore:Math.max(0,Math.round(Number(row.querySelector('.rot-days')?.value||0))),
+    activeMin:Math.max(0,Math.round(Number(row.querySelector('.rot-min')?.value||0))),
+    preferredTime:row.querySelector('.rot-time')?.value||'',
+    notes:row.querySelector('.rot-notes')?.value.trim()||''
+  })).filter(t=>t.title);
+}
+function subRecipeCard(sub={}){
+  const sid=sub.id||id('sub');
+  const ingredients=(sub.ingredients?.length?sub.ingredients:[{name:'',qty:'',unit:'גרם',category:'אחר'}]).map(i=>ingredientRow(i,true)).join('');
+  const steps=(sub.steps?.length?sub.steps:[{text:'',daysBefore:0,time:'',durationMin:0}]).map(s=>stepRow(s,true)).join('');
+  return `<div class="subrecipe-card" data-sub-id="${esc(sid)}">
+    <div class="section-head"><h3>תת־מתכון</h3><button type="button" class="btn small danger" onclick="this.closest('.subrecipe-card').remove();App.updateRecipeWeightPreview()">הסרת תת־מתכון</button></div>
+    <div class="form-grid three">
+      <div class="field"><label>שם</label><input class="sub-name" value="${esc(sub.name||'')}"></div>
+      <div class="field"><label>כמות שנכנסת למתכון הראשי — גרם</label><input class="sub-used" type="number" min="0" step="1" value="${Math.round(Number(sub.usedQtyGrams||0))}"></div>
+      <div class="field"><label>אחוז אידוי</label><input class="sub-evap" type="number" min="0" max="100" step="0.1" value="${Number(sub.evaporationPct||0)}"></div>
+      <div class="field"><label>זמן הכנה פעיל</label><input class="sub-prep" type="number" min="0" value="${Number(sub.prepMin||0)}"></div>
+      <div class="field"><label>מנוחה</label><input class="sub-rest" type="number" min="0" value="${Number(sub.restMin||0)}"></div>
+      <div class="field"><label>אפייה</label><input class="sub-bake" type="number" min="0" value="${Number(sub.bakeMin||0)}"></div>
+      <div class="field"><label>טמפרטורה</label><input class="sub-temp" type="number" value="${Number(sub.ovenTemp||0)}"></div>
+      <div class="field full"><label>הערות</label><textarea class="sub-notes">${esc(sub.notes||'')}</textarea></div>
+    </div>
+    <div class="recipe-subsection"><div class="section-head"><h4>רכיבים</h4><button type="button" class="btn small secondary" onclick="App.addSubIngredient(this)">+ רכיב</button></div><div class="sub-ingredients">${ingredients}</div></div>
+    <div class="recipe-subsection"><div class="section-head"><h4>שלבים</h4><button type="button" class="btn small secondary" onclick="App.addSubStep(this)">+ שלב</button></div><div class="sub-steps">${steps}</div></div>
+    <div class="sub-weight-preview notice"></div>
+  </div>`;
+}
+
 function recipeForm(raw={}){
   const r=migrateRecipe({id:'',name:'',category:'עוגיות',yieldUnits:1,packageWeight:200,unitWeight:200,prepMin:30,restMin:60,bakeMin:12,ovenTemp:175,traysPerBatch:1,unitsPerTray:12,shelfLifeDays:4,wastePct:5,evaporationPct:12,salePrice:12,allergens:'',notes:'',ingredients:[],steps:[],bakingSteps:[],subRecipes:[],warnings:[],...raw});
   modal(r.id?'עריכת מתכון':'מתכון חדש',`<form id="recipeForm" class="recipe-editor" data-editor-mode="quick" novalidate><input type="hidden" name="id" value="${esc(r.id)}">
@@ -809,8 +880,8 @@ function reviewImportedRecipe(r){
   const linked=r.ingredients.filter(i=>i.linkedSubRecipeId).map(i=>`<span class="badge green">↗ ${esc(i.name)} מקושר לתת־מתכון</span>`).join(' ');
   modal('בדיקת המתכון לפני שמירה',`${r.warnings?.length?`<div class="notice warning"><strong>נדרשת בדיקה:</strong><ul class="warning-list">${r.warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></div>`:'<div class="notice success">לא נמצאו סתירות בולטות. עדיין מומלץ לעבור על הכמויות.</div>'}<div class="import-summary"><div><strong>${r.subRecipes.length+1}</strong><div class="muted">שלבים</div></div><div><strong>${totalIngredients}</strong><div class="muted">מצרכים</div></div><div><strong>${totalActions}</strong><div class="muted">פעולות</div></div><div><strong>${r.subRecipes.length}</strong><div class="muted">תתי־מתכונים</div></div></div>${subCards}<div class="review-section"><div class="recipe-card-kicker">שלב ${r.subRecipes.length+1} · מתכון ראשי</div><strong>${esc(r.name)}</strong><div class="meta">${r.ingredients.length} מצרכים · ${r.steps.length} פעולות הכנה · ${r.bakingSteps.length} פעולות אפייה · הערות ${r.notes?'כן':'לא'}</div><div style="margin-top:9px">${linked||'<span class="muted">לא נמצא קישור לתת־מתכון</span>'}</div></div><div class="actions"><button class="btn secondary" onclick="App.openPendingRecipe()">פתיחה לעריכה ושמירה</button><button class="btn ghost" onclick="App.close()">ביטול</button></div>`)
 }
-function recipeBookCard(r){const p=packageSummary(r);return`<article class="recipe-card" data-search="${esc((r.name+' '+r.category).toLowerCase())}" data-category="${esc(r.category||'אחר')}"><button class="recipe-card-main" onclick="App.openBookRecipe('${r.id}')"><div class="recipe-card-kicker">${esc(r.category||'מתכון')} ${r.subRecipes?.length?'· מורכב':''}</div><h3>${esc(r.name)}</h3><div class="recipe-card-meta"><span>◷ ${fmt(Number(r.prepMin||0)+Number(r.bakeMin||0),0)} דק׳</span><span>◌ ${p.fullBags} שקיות</span><span>⚖ ${showQty(p.finalWeight,'גרם')}</span></div></button><div class="recipe-card-actions"><button class="btn small secondary" onclick="App.openBookRecipe('${r.id}')">פתיחת מתכון</button><button class="btn small ghost" onclick="App.weightCalc('${r.id}')">התאמת כמות</button></div></article>`}
-function renderRecipeBook(){const cats=[...new Set(state.recipes.map(r=>r.category||'אחר'))].sort((a,b)=>a.localeCompare(b,'he'));document.getElementById('view-recipebook').innerHTML=`<div class="card recipe-book-shell"><div class="section-head"><div><h2>ספר המתכונים</h2><div class="hint">תצוגה נקייה לעבודה במטבח, כולל תתי־מתכונים וסדר הכנה.</div></div><button class="btn secondary" onclick="App.importRecipe()">✨ הדבקת מתכון</button></div><div class="recipe-book-toolbar"><div class="field"><label>חיפוש</label><input id="recipeBookSearch" type="search" placeholder="שם מתכון או קטגוריה" oninput="App.filterRecipeBook()"></div><div class="field"><label>קטגוריה</label><select id="recipeBookCategory" onchange="App.filterRecipeBook()"><option value="">הכול</option>${cats.map(c=>`<option>${esc(c)}</option>`).join('')}</select></div></div><div id="recipeBookGrid" class="recipe-book-grid">${state.recipes.map(recipeBookCard).join('')||'<div class="empty">עדיין אין מתכונים בספר.</div>'}</div></div>`}
+function recipeBookCard(r,index=0){const p=packageSummary(r),minutes=Number(r.prepMin||0)+Number(r.bakeMin||0),tasks=groupedWorkflowFromRecipe(r).length;return`<article class="recipe-book-card" data-search="${esc((r.name+' '+r.category).toLowerCase())}" data-category="${esc(r.category||'אחר')}" style="--book-index:${index}"><button class="recipe-book-cover" onclick="App.openBookRecipe('${r.id}')"><span class="recipe-book-glow"></span><div class="recipe-book-cover-top"><span class="recipe-book-category">${esc(r.category||'מתכון')}${r.subRecipes?.length?' · מורכב':''}</span><span class="recipe-book-symbol">✦</span></div><div class="recipe-book-title"><h3>${esc(r.name)}</h3><p>${r.subRecipes?.length?`${r.subRecipes.length} תתי־מתכונים`:'מתכון רגיל'}${tasks?` · ${tasks} משימות להזמנה`:''}</p></div><div class="recipe-book-metrics"><span><strong>${fmt(minutes,0)}</strong><small>דקות</small></span><span><strong>${p.fullBags}</strong><small>שקיות</small></span><span><strong>${showQty(p.finalWeight,'גרם')}</strong><small>משקל סופי</small></span></div><div class="recipe-book-open">פתיחת המתכון <span>←</span></div></button><div class="recipe-book-actions"><button class="btn small secondary" onclick="App.openBookRecipe('${r.id}')">פתיחה</button><button class="btn small ghost" onclick="App.weightCalc('${r.id}')">התאמת כמות</button><button class="btn small ghost" onclick="App.editRecipe('${r.id}')">עריכה</button></div></article>`}
+function renderRecipeBook(){const cats=[...new Set(state.recipes.map(r=>r.category||'אחר'))].sort((a,b)=>a.localeCompare(b,'he')),totalBags=state.recipes.reduce((sum,r)=>sum+packageSummary(r).fullBags,0),complex=state.recipes.filter(r=>r.subRecipes?.length).length;document.getElementById('view-recipebook').innerHTML=`<section class="recipe-library"><div class="recipe-library-hero"><div class="recipe-library-copy"><span class="recipe-library-eyebrow">ספר העבודה שלך</span><h2>כל המתכונים, במקום אחד שנעים לעבוד בו</h2><p>חיפוש מהיר, פתיחה חלקה ונתוני תפוקה ברורים — בלי עומס ובלי טבלאות צפופות.</p><div class="recipe-library-actions"><button class="btn secondary" onclick="App.importRecipe()">✨ הדבקת מתכון</button><button class="btn ghost" onclick="App.newRecipe()">+ מתכון חדש</button></div></div><div class="recipe-library-summary"><div><strong>${state.recipes.length}</strong><span>מתכונים</span></div><div><strong>${complex}</strong><span>מורכבים</span></div><div><strong>${totalBags}</strong><span>שקיות בתפוקה</span></div><span class="recipe-library-orbit one"></span><span class="recipe-library-orbit two"></span></div></div><div class="recipe-book-toolbar premium"><label class="recipe-book-search"><span>⌕</span><input id="recipeBookSearch" type="search" placeholder="חיפוש לפי שם או קטגוריה…" oninput="App.filterRecipeBook()"></label><label class="recipe-book-select"><span>קטגוריה</span><select id="recipeBookCategory" onchange="App.filterRecipeBook()"><option value="">הכול</option>${cats.map(c=>`<option>${esc(c)}</option>`).join('')}</select></label></div><div id="recipeBookGrid" class="recipe-book-grid premium-grid">${state.recipes.map((r,i)=>recipeBookCard(r,i)).join('')||'<div class="empty">עדיין אין מתכונים בספר.</div>'}</div></section>`}
 function filterRecipeBook(){const q=String(document.getElementById('recipeBookSearch')?.value||'').toLowerCase().trim(),cat=document.getElementById('recipeBookCategory')?.value||'';document.querySelectorAll('#recipeBookGrid .recipe-card').forEach(card=>{card.hidden=!((!q||card.dataset.search.includes(q))&&(!cat||card.dataset.category===cat))})}
 function ingredientDisplay(i,linkMap={}){
   const link=i.linkedSubRecipeId&&linkMap[i.linkedSubRecipeId];
@@ -1197,7 +1268,7 @@ function initServiceWorkerUpdates(){
   };
   window.addEventListener('load',async()=>{
     try{
-      const registration=await navigator.serviceWorker.register('./sw.js?v=1070',{updateViaCache:'none'});
+      const registration=await navigator.serviceWorker.register('./sw.js?v=1100',{updateViaCache:'none'});
       inspect(registration);
       await registration.update();
       const check=()=>registrationRef?.update().catch(()=>{});
