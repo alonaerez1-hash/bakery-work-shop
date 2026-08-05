@@ -1,10 +1,10 @@
 {
   "name": "Bakery Workspace — Luxury Bakery Studio",
   "short_name": "Bakery Workspace",
-  "start_url": "./index.html?v=960",
+  "start_url": "./index.html?v=1010",
   "display": "standalone",
-  "background_color": "#f7efe4",
-  "theme_color": "#2b1712",
+  "background_color": "#f5fbf8",
+  "theme_color": "#173d45",
   "lang": "he",
   "dir": "rtl",
   "icons": []
