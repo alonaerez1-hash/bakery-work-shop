@@ -10,8 +10,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>Bakery Workspace — Luxury Bakery Studio</title>
-<link rel="manifest" href="manifest.json?v=1010">
-<link rel="stylesheet" href="styles.css?v=1010">
+<link rel="manifest" href="manifest.json?v=1040">
+<link rel="stylesheet" href="styles.css?v=1040">
 </head>
 <body>
 <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
@@ -20,11 +20,10 @@
   <div class="brand-wrap"><div class="brand-mark">B</div><div><h1 id="brandTitle">Bakery Workspace</h1><p>Luxury Bakery Studio · ניהול חכם מהמתכון ועד המסירה</p></div></div>
   <div class="top-actions"><span id="saveStatus" class="status"></span><button class="btn ghost" id="backupBtn">⇩ גיבוי</button><button class="btn ghost" id="cloudBtn">☁ ענן</button></div>
 </header>
-<div class="tabs-shell"><button class="tabs-scroll tabs-scroll-start" type="button" aria-label="גלילה לתחילת הלשוניות" onclick="App.scrollTabs(-1)">‹</button><nav class="tabs" id="tabs" aria-label="ניווט ראשי">
+<div class="tabs-shell"><button class="tabs-scroll tabs-scroll-left" type="button" aria-label="הצגת הלשוניות שמשמאל" onclick="App.scrollTabs('left')">‹</button><nav class="tabs" id="tabs" aria-label="ניווט ראשי">
   <button data-view="dashboard" class="active"><span>⌂</span>לוח ראשי</button>
   <button data-view="orders"><span>◇</span>הזמנות</button>
   <button data-view="planner"><span>▦</span>תכנון שבועי</button>
-  <button data-view="assistant"><span>✦</span>עוזרת AI</button>
   <button data-view="recipes"><span>✎</span>מתכונים</button>
   <button data-view="recipebook"><span>▤</span>ספר מתכונים</button>
   <button data-view="production"><span>◫</span>משימות</button>
@@ -35,7 +34,7 @@
   <button data-view="todo"><span>✓</span>To Do List</button>
   <button data-view="settings"><span>⚙</span>הגדרות</button>
   <button data-view="invoices"><span>▧</span>חשבוניות</button>
-</nav><button class="tabs-scroll tabs-scroll-end" type="button" aria-label="גלילה לסוף הלשוניות" onclick="App.scrollTabs(1)">›</button></div>
+</nav><button class="tabs-scroll tabs-scroll-right" type="button" aria-label="הצגת הלשוניות שמימין" onclick="App.scrollTabs('right')">›</button></div>
 <main>
   <section class="view active" id="view-dashboard"></section>
   <section class="view" id="view-orders"></section>
@@ -56,8 +55,8 @@
 <div class="modal" id="modal" role="dialog" aria-modal="true"><div class="modal-card"><div class="modal-head"><h2 id="modalTitle"></h2><button class="icon-btn" id="modalClose" aria-label="סגירה">✕</button></div><div id="modalBody"></div></div></div>
 <input type="file" id="importFile" accept="application/json" hidden>
 <input type="file" id="ramiImportFile" accept=".gz,.xml,application/gzip,application/xml,text/xml" hidden>
-<script src="pako_inflate.min.js?v=1010"></script>
+<script src="pako_inflate.min.js?v=1040"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="app.js?v=1010"></script>
+<script src="app.js?v=1040"></script>
 </body>
 </html>
