@@ -400,3 +400,10 @@ html{background:var(--cream)}body{background:radial-gradient(circle at 8% 8%,rgb
 @media(max-width:900px){.sales-event-grid{grid-template-columns:1fr}.sales-event-item{grid-template-columns:repeat(2,minmax(0,1fr))}.sales-event-item .field:first-child{grid-column:1/-1}.sales-event-item>button{align-self:end}.cost-breakdown-head{grid-template-columns:1fr 1fr 1fr}}
 @media(max-width:620px){.toast-stack{left:12px;right:12px;bottom:12px}.app-toast{max-width:none;width:100%}.event-metrics,.cost-breakdown-head{grid-template-columns:1fr}.sales-event-item{grid-template-columns:1fr 1fr}.sales-event-item .field:first-child{grid-column:1/-1}}
 @media(prefers-reduced-motion:reduce){.app-toast{transition:none}}
+
+/* v11.6 — interactive cost tile + automatic product classification */
+.clickable-cost{cursor:pointer;position:relative;transition:transform .16s ease,box-shadow .16s ease,background .16s ease,border-color .16s ease;outline:none}
+.clickable-cost:hover,.clickable-cost:focus-visible{transform:translateY(-2px);background:rgba(198,222,212,.78)!important;box-shadow:0 8px 20px rgba(41,68,61,.12);border-color:rgba(81,126,111,.24)}
+.clickable-cost:focus-visible{box-shadow:0 0 0 3px rgba(112,164,146,.18),0 8px 20px rgba(41,68,61,.12)}
+.clickable-cost::after{content:'↗';position:absolute;top:5px;left:7px;font-size:9px;opacity:.45}
+.field select[name="category"]{font-weight:700;color:#29443d;background:rgba(250,253,251,.96)}
