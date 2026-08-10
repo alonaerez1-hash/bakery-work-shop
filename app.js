@@ -95,7 +95,7 @@ function migrateState(raw){
   x.invoiceProfile={...base.invoiceProfile,...(raw?.invoiceProfile||{})};
   x.invoices=(Array.isArray(raw?.invoices)?raw.invoices:[]).map(inv=>({...inv,items:Array.isArray(inv.items)?inv.items:[],seller:{...x.invoiceProfile,...(inv.seller||{})},vatRate:Number(inv.vatRate??x.invoiceProfile.vatRate??18),vatEnabled:inv.vatEnabled!==false,status:INVOICE_STATUSES.includes(inv.status)?inv.status:'טיוטה'}));
   x.invoiceSequence=Math.max(1,Number(raw?.invoiceSequence||1));
-  x.todoItems=(Array.isArray(raw?.todoItems)?raw.todoItems:[]).map(item=>({id:item.id||id('todo'),text:String(item.text||'').trim(),done:!!item.done,priority:['נמוכה','רגילה','גבוהה'].includes(item.priority)?item.priority:'רגילה',dueDate:String(item.dueDate||''),notes:String(item.notes||''),createdAt:item.createdAt||new Date().toISOString()}));
+  x.todoItems=(Array.isArray(raw?.todoItems)?raw.todoItems:[]).map(item=>({id:item.id||id('todo'),text:String(item.text||'').trim(),done:!!item.done,priority:['נמוכה','רגילה','גבוהה'].includes(item.priority)?item.priority:'רגילה',dueDate:String(item.dueDate||''),notes:String(item.notes||''),plannerTime:String(item.plannerTime||''),plannerDuration:Math.max(5,Number(item.plannerDuration||30)),plannerPassiveMin:Math.max(0,Number(item.plannerPassiveMin||0)),plannerType:TASK_TYPES[item.plannerType]?item.plannerType:'prep',createdAt:item.createdAt||new Date().toISOString()}));
   x.inventory=(Array.isArray(raw?.inventory)?raw.inventory:[]).map(item=>{const i={...item};delete i.minPackageCount;delete i.minQty;delete i.costPerPackage;delete i.unitCost;delete i.batch;delete i.batchNumber;delete i.lot;const count=Math.max(0,Math.round(Number(i.packageCount??(Number(i.qty||0)>0?1:0)))),per=Math.max(0,Number(i.amountPerPackage??i.qty??0));i.packageCount=count;if(!Number.isFinite(Number(i.stockQty)))i.stockQty=count*per;else i.stockQty=Math.max(0,Math.round(Number(i.stockQty)));i.unit='גרם';return i}).filter(i=>!isWaterIngredient(i.name));
   x.suppliers=(Array.isArray(raw?.suppliers)?raw.suppliers:[]).map(s=>({...s,prices:(Array.isArray(s.prices)?s.prices:[]).map(p=>({...p,id:p.id||id('price')}))}));
   x.productionLogs=(Array.isArray(raw?.productionLogs)?raw.productionLogs:[]).map(log=>({...log,id:log.id||id('prodlog'),date:String(log.date||dayKey(new Date())),recipeRuns:Math.max(0,Number(log.recipeRuns??log.recipeRuns??1)),outputQty:Math.max(0,Number(log.outputQty||0)),outputUnit:String(log.outputUnit||'שקיות'),deductions:Array.isArray(log.deductions)?log.deductions:[],shortages:Array.isArray(log.shortages)?log.shortages:[]}));
@@ -311,6 +311,11 @@ function parseIngredientLine(line){
     const name=normalizeIngredientName(s.replace(/^קורט\s+/,''));
     return name?{name,qty:1,unit:'קורט',category:ingredientCategory(name)}:null;
   }
+  // במתכונים נפוץ לכתוב "כפית וניל" או "כף קקאו" בלי הספרה 1.
+  if(/^(?:כפית|כף|כוס|חבילה|יחידה)\s+/i.test(s)){
+    const parsed=parseQuantityAndUnit(`1 ${s}`);
+    if(parsed){const name=normalizeIngredientName(parsed.rest);return name?{name,qty:1,unit:parsed.unit,category:ingredientCategory(name)}:null}
+  }
   // תומך גם במבנה "שם רכיב: 220 גרם" וגם במבנה "220 גרם רכיב".
   const named=s.match(/^([^:]{2,80})\s*:\s*(.+)$/);
   if(named){
@@ -339,45 +344,158 @@ function ingredientNamesMatch(a,b){
   const y=cleanIngredientName(b).replace(/\b(?:מתכון|תת מתכון|שלב)\b/g,'').trim();
   return !!x&&!!y&&(x===y||x.includes(y)||y.includes(x));
 }
+function isMainIngredientSubsectionHeading(line){
+  const t=cleanIngredientName(normalizeSectionName(line));
+  return /^(?:חומרים\s+)?(?:ל)?(?:בצק|קיפול|הברשה|ציפוי|קישוט|פיזור|הגשה|אפייה|תבנית|שימון|סיום|גימור)(?:\s+.*)?$/.test(t)
+    || /^(?:לקיפול|להברשה|לציפוי|לקישוט|לפיזור|להגשה|לפני אפייה|לאחר אפייה|אחרי אפייה)$/.test(t);
+}
+function isSubRecipeHeading(line){
+  const t=cleanIngredientName(normalizeSectionName(line));
+  if(!t||isMainIngredientSubsectionHeading(t))return false;
+  return /(?:^|\s)(?:מילוי|קרם|גנאש|פרלינה|טופי|רוטב|סירופ|ריבה|קראמבל|סטרויזל|קונפי|פטיסייר|מרנג)(?:\s|$)/.test(t);
+}
+function isMainMethodHeading(line){
+  const t=cleanIngredientName(normalizeSectionName(line));
+  return /^(?:הרכבה|עיצוב|עיצוב והרכבה|הרכבה ואפייה|התפחה|התפחה ואפייה|אפייה|סיום|גימור|אופן ההכנה|אופן הכנה|הכנה|שלבי הכנה)$/.test(t);
+}
+function extractInlineIngredients(line){
+  const text=String(line||'').replace(/([.;])/g,' $1 '),out=[];
+  const unit='(?:גרם|ק[״\"׳\']?ג|מ[״\"׳\']?ל|מיליליטר|ליטר|כפית|כפיות|כף|כפות|כוס|כוסות|יחידה|יחידות)';
+  const re=new RegExp('(\\d+(?:[.,]\\d+)?|\\d+\\/\\d+)\\s*('+unit+')\\s+(.+?)(?=(?:\\s+ו?\\s*\\d+(?:[.,]\\d+)?\\s*'+unit+')|[.;]|$)','g');
+  let m;
+  while((m=re.exec(text))){
+    const cleanName=String(m[3]||'').replace(/\s+(?:ו?טורפים|ו?מערבבים|ו?ממיסים|ו?מוסיפים)(?:\s+.*)?$/,'').replace(/\s+מהמקרר(?:\s+.*)?$/,'').replace(/\s+ו\s*$/,'').trim();
+    const candidate=`${m[1]} ${m[2]} ${cleanName}`.trim();
+    const parsed=parseIngredientLine(candidate);
+    if(parsed&&parsed.name&&!/^(?:דקות|שעות|מעלות)$/.test(parsed.name))out.push(parsed);
+  }
+  return out;
+}
 function localParseRecipe(text){
   const raw=String(text||'').replace(/\r/g,''),lines=raw.split('\n').map(x=>x.trim()).filter(Boolean);
-  let originalTitle='',mode='unknown',current=null;const sections=[],warnings=[];
+  let originalTitle='',mode='unknown',current=null,mainSection=null;const sections=[],warnings=[];
   const findSection=name=>sections.find(s=>cleanIngredientName(s.name)===cleanIngredientName(normalizeSectionName(name)));
-  const useSection=name=>{const clean=normalizeSectionName(name)||'מתכון ראשי';current=findSection(clean)||{id:id('sub'),name:clean,ingredients:[],steps:[],bakingSteps:[],notes:[]};if(!sections.includes(current))sections.push(current);return current};
+  const useSection=(name,role='auto')=>{
+    const clean=normalizeSectionName(name)||originalTitle||'מתכון ראשי';
+    current=findSection(clean)||{id:id('sub'),name:clean,role,ingredients:[],steps:[],bakingSteps:[],notes:[]};
+    if(role!=='auto')current.role=role;
+    if(!sections.includes(current))sections.push(current);
+    if(current.role==='main'&&!mainSection)mainSection=current;
+    return current;
+  };
+  const useMain=()=>{
+    if(mainSection){current=mainSection;return current}
+    mainSection=useSection(originalTitle||'מתכון ראשי','main');
+    return mainSection;
+  };
   for(let index=0;index<lines.length;index++){
     const line=lines[index],plain=line.replace(/[📦✨]/g,'').trim(),next=lines[index+1]||'';
-    if(!originalTitle&&index<4&&!parseIngredientLine(line)&&!isGenericHeading(line)&&!isActionLine(line)&&!/(?:רכיבים|מצרכים|אופן הכנה)/.test(plain)){originalTitle=normalizeSectionName(line);continue}
-    let m=plain.match(/^(?:מצרכים|רכיבים)\s+(?:ל|עבור)?\s*(.+?)\s*:?$/i);
-    if(m){useSection(m[1]);mode='ingredients';continue}
-    if(/^(?:מצרכים|רכיבים|ingredients)\s*:?$/i.test(plain)){if(!current)useSection(originalTitle||'מתכון ראשי');mode='ingredients';continue}
+    if(!originalTitle&&index<4&&!parseIngredientLine(line)&&!isGenericHeading(line)&&!isActionLine(line)&&!/(?:רכיבים|מצרכים|חומרים|אופן הכנה)/.test(plain)){
+      originalTitle=normalizeSectionName(line);continue;
+    }
+
+    // גם "לקיפול: 250 גרם חמאה" בשורה אחת מזוהה כרכיב של המתכון הראשי.
+    let m=plain.match(/^((?:לקיפול|להברשה|לציפוי|לקישוט|לפיזור|להגשה))\s*:\s*(.+)$/i);
+    if(m){useMain();const inline=parseIngredientLine(m[2]);if(inline)current.ingredients.push(inline);mode='ingredients';continue}
+    // תת־מתכון יכול להופיע גם בשורה אחת, למשל "גנאש: 200 גרם שוקולד".
+    m=plain.match(/^(.+?)\s*:\s*(.+)$/i);
+    if(m&&isSubRecipeHeading(m[1])){useSection(m[1],'sub');const inline=parseIngredientLine(m[2]);if(inline)current.ingredients.push(inline);mode='ingredients';continue}
+
+    // "חומרים לבצק" / "מצרכים לבצק" הם חלק מהמתכון הראשי, לא תת־מתכון.
+    m=plain.match(/^(?:מצרכים|רכיבים|חומרים)\s+(?:ל|עבור)?\s*(.+?)\s*:?$/i);
+    if(m){
+      const heading=normalizeSectionName(m[1]);
+      if(isMainIngredientSubsectionHeading(heading)||/^(?:ה)?בצק(?:\s|$)/.test(cleanIngredientName(heading))){useMain();mode='ingredients';continue}
+      if(isSubRecipeHeading(heading)){useSection(heading,'sub');mode='ingredients';continue}
+      useMain();mode='ingredients';continue;
+    }
+    if(/^(?:מצרכים|רכיבים|חומרים|ingredients)\s*:?$/i.test(plain)){useMain();mode='ingredients';continue}
+
     m=plain.match(/^(.+?)\s+(?:אופן\s+ההכנה|אופן\s+הכנה|הוראות\s+הכנה)\s*:?$/i);
-    if(m){useSection(m[1]);mode='steps';continue}
-    if(/^(?:אופן\s+הכנה|אופן\s+ההכנה|הוראות|הכנה|שלבי\s+הכנה|method|instructions)\s*:?$/i.test(plain)){if(!current)useSection(originalTitle||'מתכון ראשי');mode='steps';continue}
-    if(/^(?:אפייה|שלב\s+האפייה)\s*:?$/i.test(plain)){if(!current)useSection(originalTitle||'מתכון ראשי');mode='baking';continue}
-    if(/^(?:הערות|טיפים|אחסון|אחסון\s+וחיי\s+מדף)\s*:?$/i.test(plain)){if(!current)useSection(originalTitle||'מתכון ראשי');mode='notes';continue}
+    if(m){
+      const heading=normalizeSectionName(m[1]);
+      if(isSubRecipeHeading(heading))useSection(heading,'sub');else useMain();
+      mode='steps';continue;
+    }
+    m=plain.match(/^(?:אופן\s+הכנת|הוראות\s+הכנת)\s+(.+?)\s*:?$/i)||plain.match(/^אופן\s+ההכנה\s+(?:ל|של)\s*(.+?)\s*:?$/i);
+    if(m){
+      const heading=normalizeSectionName(m[1]);
+      if(isSubRecipeHeading(heading))useSection(heading,'sub');else useMain();
+      mode='steps';continue;
+    }
+    if(/^(?:אופן\s+הכנה|אופן\s+ההכנה|הוראות|הכנה|שלבי\s+הכנה|method|instructions)\s*:?$/i.test(plain)){useMain();mode='steps';continue}
+    if(/^(?:אפייה|שלב\s+האפייה)\s*:?$/i.test(plain)){useMain();mode='baking';continue}
+    if(/^(?:הערות|טיפים|אחסון|אחסון\s+וחיי\s+מדף)\s*:?$/i.test(plain)){if(!current)useMain();mode='notes';continue}
+
+    // כותרות של רכיבי עזר כמו "לקיפול" נשארות בתוך המתכון הראשי.
+    if(isMainIngredientSubsectionHeading(plain)){
+      useMain();
+      mode=/אפייה/.test(cleanIngredientName(plain))?'baking':(/הרכבה|התפחה|עיצוב|סיום|גימור/.test(cleanIngredientName(plain))?'steps':'ingredients');
+      continue;
+    }
+    // כותרת של רכיב מורכב אמיתי יוצרת תת־מתכון גם אם יש שורת הסבר לפני רשימת המצרכים.
+    if(isSubRecipeHeading(plain)&&line.length<70&&!parseIngredientLine(line)){
+      useSection(plain,'sub');mode='ingredients';continue;
+    }
+    // "הרכבה", "התפחה ואפייה" וכד' מחזירות למתכון הראשי.
+    if(isMainMethodHeading(plain)){
+      useMain();mode=/אפייה/.test(cleanIngredientName(plain))?'baking':'steps';continue;
+    }
+
     // כותרות כגון "שלב 1 – הכנת הבצק" שייכות לאופן ההכנה ואינן יוצרות תת־מתכון.
-    if(/^שלב\s*\d+\s*[:.\-–—]/i.test(plain)||/^שלב\s*\d+/i.test(plain)){if(!current)useSection(originalTitle||'מתכון ראשי');mode='steps';current.steps.push({text:plain.replace(/[:]+$/,''),daysBefore:0,time:'',durationMin:0});continue}
+    if(/^שלב\s*\d+\s*[:.\-–—]/i.test(plain)||/^שלב\s*\d+\b/i.test(plain)){if(!current)useMain();mode='steps';current.steps.push({text:plain.replace(/[:]+$/,''),daysBefore:0,time:'',durationMin:0});continue}
+
+    const inlineIngredients=extractInlineIngredients(line);
+    if(inlineIngredients.length>=2){
+      if(!current)useMain();
+      const existing=new Set(current.ingredients.map(i=>`${cleanIngredientName(i.name)}|${i.qty}|${i.unit}`));
+      inlineIngredients.forEach(i=>{const key=`${cleanIngredientName(i.name)}|${i.qty}|${i.unit}`;if(!existing.has(key)){current.ingredients.push(i);existing.add(key)}});
+      const action=line.replace(/^\d+[.)]\s*/,'').replace(/^[•*\-–—]+\s*/,'').trim();
+      if(action&&isActionLine(action))current.steps.push({text:action,daysBefore:0,time:'',durationMin:0});
+      mode='steps';continue;
+    }
     const ing=parseIngredientLine(line),nextIng=parseIngredientLine(next);
     const shortHeading=!ing&&!/^שלב\s*\d+/i.test(plain)&&!isActionLine(line)&&!isNoteLine(line)&&line.length<55&&nextIng&&!/^(?:זמן|תפוקה|טמפרטורה)/.test(line);
-    if(shortHeading){useSection(line);mode='ingredients';continue}
-    if(ing&&mode==='ingredients'){if(!current)useSection(originalTitle||'מתכון ראשי');current.ingredients.push(ing);continue}
+    if(shortHeading){
+      if(isSubRecipeHeading(line)){useSection(line,'sub');mode='ingredients'}
+      else {useMain();mode='ingredients'}
+      continue;
+    }
+    if(ing&&mode==='ingredients'){if(!current)useMain();current.ingredients.push(ing);continue}
+
     const clean=line.replace(/^\d+[.)]\s*/,'').replace(/^[•*\-–—]+\s*/,'').trim();if(!clean)continue;
-    if(isNoteLine(clean)||mode==='notes'){if(!current)useSection(originalTitle||'מתכון ראשי');current.notes.push(clean);mode='notes';continue}
-    if(mode==='baking'){current.bakingSteps.push({text:clean,daysBefore:0,time:'',durationMin:0});continue}
-    if(isActionLine(clean)||mode==='steps'||sections.some(s=>s.ingredients.length)){if(!current)useSection(originalTitle||'מתכון ראשי');current.steps.push({text:clean,daysBefore:0,time:'',durationMin:0});mode='steps';continue}
+    if(/^מומלץ\b/.test(cleanIngredientName(clean))){if(!current)useMain();current.notes.push(clean);continue}
+    if(current?.role==='sub'&&/(?:לחלק את הבצק|לרדד (?:את )?הבצק|לרדד כל חלק|לעצב (?:את )?הבצק|להתפיח .*?(?:מאפ|בצק)|לאפות .*?(?:מאפ|עוג|בצק))/i.test(cleanIngredientName(clean))){useMain();mode='steps'}
+    if(isNoteLine(clean)||mode==='notes'){if(!current)useMain();current.notes.push(clean);mode='notes';continue}
+    if(mode==='baking'){if(!current)useMain();current.bakingSteps.push({text:clean,daysBefore:0,time:'',durationMin:0});continue}
+    if(isActionLine(clean)||mode==='steps'||sections.some(s=>s.ingredients.length)){
+      if(!current)useMain();
+      current.steps.push({text:clean,daysBefore:0,time:'',durationMin:0});mode='steps';continue;
+    }
   }
-  if(!sections.length)useSection(originalTitle||'מתכון ראשי');
+  if(!sections.length)useMain();
+  if(!mainSection)mainSection=sections.find(s=>s.role==='main')||sections.find(s=>!isSubRecipeHeading(s.name))||sections[0];
+
   const ingredientLinks=[];
-  sections.forEach(container=>container.ingredients.forEach(i=>sections.forEach(candidate=>{if(candidate!==container&&candidate.ingredients.length&&ingredientNamesMatch(i.name,candidate.name))ingredientLinks.push({container,ingredient:i,sub:candidate})})));
-  let main=ingredientLinks[0]?.container||sections.find(s=>/עוגי|קוקי/.test(cleanIngredientName(s.name)))||sections.slice().sort((a,b)=>b.ingredients.length-a.ingredients.length)[0]||sections[0];
+  sections.forEach(container=>container.ingredients.forEach(i=>sections.forEach(candidate=>{if(candidate!==container&&candidate.ingredients.length&&candidate.role==='sub'&&ingredientNamesMatch(i.name,candidate.name))ingredientLinks.push({container,ingredient:i,sub:candidate})})));
+  let main=mainSection||ingredientLinks[0]?.container||sections.slice().sort((a,b)=>b.ingredients.length-a.ingredients.length)[0]||sections[0];
   const linkedSubs=[...new Set(ingredientLinks.filter(x=>x.container===main).map(x=>x.sub))];
-  let subSections=linkedSubs.length?linkedSubs:sections.filter(s=>s!==main&&s.ingredients.length);
+  const explicitSubs=sections.filter(s=>s!==main&&s.ingredients.length&&s.role==='sub');
+  let subSections=[...new Set([...linkedSubs,...explicitSubs])];
   const subRecipes=subSections.map(s=>({...s,usedQtyGrams:0,evaporationPct:0,prepMin:0,restMin:0,bakeMin:0,ovenTemp:0,notes:s.notes.join('\n')}));
   main.ingredients.forEach(i=>{const match=subRecipes.find(s=>ingredientNamesMatch(i.name,s.name));if(match){i.linkedSubRecipeId=match.id;match.usedQtyGrams=ingredientWeightData(i).grams}});
+  subRecipes.forEach(sub=>{
+    const linked=main.ingredients.find(i=>i.linkedSubRecipeId===sub.id||ingredientNamesMatch(i.name,sub.name));
+    if(linked)return;
+    const fullYield=Math.round(calculateSubRecipeWeight(sub).finalWeight||0);
+    if(fullYield>0){
+      sub.usedQtyGrams=fullYield;
+      main.ingredients.push({name:sub.name,qty:fullYield,unit:'גרם',category:'תוספות',linkedSubRecipeId:sub.id});
+      warnings.push(`לא צוינה כמות שימוש עבור ${sub.name}; הנחתי שכל תת־המתכון נכנס למתכון הראשי. אפשר לשנות זאת במסך העריכה.`);
+    }
+  });
   let finalName=originalTitle||main.name||'מתכון מיובא';
-  if(/^(?:עוגיות|עוגיה|cookies?)$/i.test(cleanIngredientName(main.name))&&subRecipes.some(s=>ingredientNamesMatch(finalName,s.name)))finalName=`עוגיות ${subRecipes.find(s=>ingredientNamesMatch(finalName,s.name)).name}`;
-  if(cleanIngredientName(finalName)===cleanIngredientName(subRecipes[0]?.name)&&/עוגי/.test(cleanIngredientName(main.name)))finalName=`${main.name} ${subRecipes[0].name}`;
-  const allIngredients=[...main.ingredients,...subRecipes.flatMap(s=>s.ingredients)],allText=cleanIngredientName(allIngredients.map(i=>i.name).join(' ')),stepText=cleanIngredientName([...main.steps,...main.bakingSteps,...subRecipes.flatMap(s=>s.steps)].map(s=>s.text).join(' '));
+  const allIngredients=[...main.ingredients,...subRecipes.flatMap(s=>s.ingredients)],allText=cleanIngredientName(allIngredients.map(i=>i.name).join(' ')),stepText=cleanIngredientName([...main.steps,...main.bakingSteps,...subRecipes.flatMap(s=>s.steps),...subRecipes.flatMap(s=>s.bakingSteps||[])].map(s=>s.text).join(' '));
   if(/שוקולד/.test(stepText)&&!/שוקולד/.test(allText))warnings.push('אופן ההכנה מזכיר שוקולד, אבל שוקולד לא מופיע ברשימת המצרכים. לא הוספתי שוקולד אוטומטית.');
   const temp=raw.match(/(?:תנור[^\d]{0,18}|)(\d{2,3})\s*(?:°|מעלות)/),bakeRange=raw.match(/אופים?[^\d]{0,20}(\d+)\s*(?:[-–—]\s*(\d+))?\s*(?:דקות|דק['׳]?)/i),bake=raw.match(/(\d+)\s*(?:דקות|דק['׳]?)\s+(?:אפייה|בתנור)/i),prep=raw.match(/זמן\s+הכנה[^\d]{0,10}(\d+)/),yieldM=raw.match(/(?:תפוקה|יוצא|מתקבל(?:ות|ים)?)[^\d]{0,15}(\d+)\s*(?:שקיות|יחידות|עוגיות|מאפים|מנות)?/i);
   if(!yieldM)warnings.push('לא נמצאה תפוקה מדויקת. מספר השקיות יחושב מהמשקל הסופי ומשקל השקית.');
@@ -535,13 +653,17 @@ function generatedTasks(){
     out.push({key:deliveryKey,date:dayKey(due),time:String(o.dueAt||'').slice(11,16),text:`${o.delivery==='משלוח'?'משלוח':'מסירה'} ל${o.customer}`,type:'delivery',duration:30,passiveMin:0,recipe:'כל ההזמנה',customer:o.customer,recipeRuns:0,qty:totalBags,source:names,notes:names,done:!!state.checkedTasks[deliveryKey],manual:false,orderKey:`${o.id}|delivery`,seq:9999,dependsOn:''});
   });
   (state.manualTasks||[]).forEach(t=>out.push({...t,done:!!state.checkedTasks[t.key],manual:true,orderKey:t.orderKey||'',seq:Number(t.seq||0),passiveMin:Number(t.passiveMin||0)}));
+  (state.todoItems||[]).filter(item=>item.dueDate).forEach(item=>{
+    const key=`todo:${item.id}`;
+    out.push({key,date:item.dueDate,time:item.plannerTime||state.settings.workStart||'08:00',text:item.text,type:TASK_TYPES[item.plannerType]?item.plannerType:'prep',duration:Math.max(5,Number(item.plannerDuration||30)),passiveMin:Math.max(0,Number(item.plannerPassiveMin||0)),recipe:'משימה אישית',customer:'',recipeRuns:0,qty:0,source:'To Do List',notes:item.notes||'',done:!!item.done,manual:false,todoId:item.id,sourceType:'todo',orderKey:'',seq:0,dependsOn:''});
+  });
   out=collapseGlobalWorkflowTasks(out);
   applyOverridesAndBlocks(out);
   return out.filter(t=>!state.hiddenPlanTasks[t.key]).sort((a,b)=>(a.date+(a.time||'99:99')).localeCompare(b.date+(b.time||'99:99'))||Number(a.seq||0)-Number(b.seq||0));
 }
 function workdayCapacity(date=dayKey(new Date())){return availabilityForDate(date).reduce((a,s)=>a+(s.end-s.start)/60000,0)}
 function weekStart(value){const d=new Date(value);d.setHours(12,0,0,0);d.setDate(d.getDate()-d.getDay());return d}
-function plannerSuggestions(tasks){const by={};tasks.forEach(t=>(by[t.date]||(by[t.date]=[])).push(t));const overloaded=Object.entries(by).filter(([date,list])=>list.reduce((a,t)=>a+Number(t.duration||0),0)>workdayCapacity(date)),unscheduled=tasks.filter(t=>t.unscheduled).length;const missing=activeOrders().filter(o=>new Date(o.dueAt)<new Date()).length;const parts=[];if(unscheduled)parts.push(`${unscheduled} משימות לא נכנסו לחלונות הזמינות`);if(overloaded.length)parts.push(`${overloaded.length} ימים עמוסים מעבר לשעות העבודה שהוגדרו`);if(shopping().length)parts.push(`${shopping().length} חומרי גלם חסרים כרגע`);if(missing)parts.push(`${missing} הזמנות שמועדן עבר`);return parts.length?parts.join(' · '):'התוכנית מתאימה לחלונות הזמינות, כוללת הכנות מקדימות ומשאירה מרווח ביטחון לפני המשלוח.'}
+function plannerSuggestions(tasks){const openTasks=tasks.filter(t=>!t.done),by={};openTasks.forEach(t=>(by[t.date]||(by[t.date]=[])).push(t));const overloaded=Object.entries(by).filter(([date,list])=>list.reduce((a,t)=>a+Number(t.duration||0),0)>workdayCapacity(date)),unscheduled=openTasks.filter(t=>t.unscheduled).length;const missing=activeOrders().filter(o=>new Date(o.dueAt)<new Date()).length;const parts=[];if(unscheduled)parts.push(`${unscheduled} משימות לא נכנסו לחלונות הזמינות`);if(overloaded.length)parts.push(`${overloaded.length} ימים עמוסים מעבר לשעות העבודה שהוגדרו`);if(shopping().length)parts.push(`${shopping().length} חומרי גלם חסרים כרגע`);if(missing)parts.push(`${missing} הזמנות שמועדן עבר`);return parts.length?parts.join(' · '):'התוכנית מתאימה לחלונות הזמינות, כוללת הכנות מקדימות ומשאירה מרווח ביטחון לפני המשלוח.'}
 
 function go(view){currentView=view;document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id===`view-${view}`));document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('active',x.dataset.view===view));render();const active=document.querySelector(`#tabs button[data-view="${view}"]`);active?.scrollIntoView({behavior:'smooth',block:'nearest',inline:'center'});window.scrollTo({top:0,behavior:'smooth'})}
 function openPlanner(){plannerMode='week';plannerWeekOffset=0;go('planner')}
@@ -633,7 +755,9 @@ function showPlannerDropHint(dayEl,time){
 function clearPlannerDropHint(){document.querySelectorAll('.planner-day.drag-target').forEach(x=>x.classList.remove('drag-target'));document.querySelectorAll('.planner-drop-time').forEach(x=>x.remove())}
 async function movePlanTask(key,date,time){
   const t=generatedTasks().find(x=>x.key===key);if(!t)return;
-  state.planOverrides[key]={...(state.planOverrides[key]||{}),date,time:time||t.time};
+  if(t.todoId){
+    const item=state.todoItems.find(x=>x.id===t.todoId);if(item){item.dueDate=date;item.plannerTime=time||t.time||state.settings.workStart||'08:00'}
+  }else state.planOverrides[key]={...(state.planOverrides[key]||{}),date,time:time||t.time};
   await persist();lastPlanDragEnd=Date.now();clearPlannerDropHint();render();
 }
 function dragOverPlanTask(e,date){e.preventDefault();const dayEl=e.currentTarget,time=plannerDropTime(e.clientY,date,dayEl);showPlannerDropHint(dayEl,time);e.dataTransfer.dropEffect='move'}
@@ -682,11 +806,12 @@ function renderPlanner(){
   }else{
     const list=tasks.filter(t=>t.date===plannerDay);body=`<div class="card"><div class="section-head"><div><h2>סדר היום</h2><div class="hint">${new Date(plannerDay+'T12:00').toLocaleDateString('he-IL',{weekday:'long',day:'numeric',month:'long'})}</div></div><input type="date" value="${plannerDay}" onchange="App.setPlannerDay(this.value)"></div><div class="planner-day-list">${list.map(t=>`<div class="day-agenda-row"><strong>${esc(t.time)}</strong><div>${planCardHtml(t)}</div></div>`).join('')||'<div class="empty">אין משימות ביום הזה</div>'}</div></div>`;
   }
-  document.getElementById('view-planner').innerHTML=`${controls}<div class="notice ${plannerSuggestions(tasks).includes('עמוסים')?'warning':'success'}">${esc(plannerSuggestions(tasks))}</div><div class="planner-legend"><span class="badge">קניות</span><span class="badge gold">תת־מתכון</span><span class="badge rose">אפייה ואריזה</span><span class="badge green">מסירה</span></div>${toggle}${body}`;
+  const visibleKeys=new Set(days.map(dayKey)),visibleTasks=plannerMode==='week'?tasks.filter(t=>visibleKeys.has(t.date)):tasks.filter(t=>t.date===plannerDay),suggestion=plannerSuggestions(visibleTasks);
+  document.getElementById('view-planner').innerHTML=`${controls}<div class="notice ${suggestion.includes('עמוסים')?'warning':'success'}">${esc(suggestion)}</div><div class="planner-legend"><span class="badge">קניות</span><span class="badge gold">תת־מתכון</span><span class="badge rose">אפייה ואריזה</span><span class="badge green">מסירה</span></div>${toggle}${body}`;
 }
 function planCardHtml(t){return`<article class="plan-card type-${esc(t.type)} ${t.done?'done':''}" draggable="true" ondragstart="App.dragPlanTask(event,'${esc(t.key)}')" onpointerdown="App.startTouchPlanDrag(event,'${esc(t.key)}')" onpointermove="App.moveTouchPlanDrag(event)" onpointerup="App.endTouchPlanDrag(event)" onpointercancel="App.endTouchPlanDrag(event)" oncontextmenu="return false" onclick="if(Date.now()-lastPlanDragEnd>500)App.editPlanTask('${esc(t.key)}')"><div class="plan-card-actions" onpointerdown="event.stopPropagation()" onclick="event.stopPropagation()"><button type="button" class="plan-card-action" draggable="false" title="עריכה" aria-label="עריכת משימה" onclick="event.stopPropagation();App.editPlanTask('${esc(t.key)}')">✎</button><button type="button" class="plan-card-action delete" draggable="false" title="מחיקה" aria-label="מחיקת משימה" onclick="event.stopPropagation();App.deletePlanTask('${esc(t.key)}')">×</button></div><div class="plan-time">${esc(t.time||'לא שובץ')} · ${fmt(t.duration,0)} דק׳ פעיל${t.passiveMin?` · ${fmt(t.passiveMin,0)} דק׳ פסיבי`:''}</div><div class="plan-title">${t.isPreprep?'<span class="badge gold">הכנה מקדימה</span> ':''}${esc(t.text)}</div><div class="meta">${esc(t.recipe||'משימה אישית')}${t.customer?' · '+esc(t.customer):''}${t.source&&t.source!==t.recipe?' · '+esc(t.source):''}</div></article>`}
-function editPlanTask(key){const task=generatedTasks().find(t=>t.key===key);if(!task)return;modal('עריכת משימה',`<form id="planTaskForm"><div class="form-grid"><div class="field full"><label>שם המשימה</label><input name="text" required value="${esc(task.text||'')}"></div><div class="field"><label>תאריך</label><input name="date" type="date" value="${esc(task.date)}"></div><div class="field"><label>שעה</label><input name="time" type="time" value="${esc(task.time)}"></div><div class="field"><label>זמן פעיל בדקות</label><input name="duration" type="number" min="5" step="5" value="${task.duration||30}"></div><div class="field"><label>זמן פסיבי אחריו</label><input name="passive" type="number" min="0" step="5" value="${task.passiveMin||0}"></div><div class="field"><label>סוג המשימה</label><select name="type">${Object.entries(TASK_TYPES).map(([k,v])=>`<option value="${k}" ${task.type===k?'selected':''}>${v}</option>`).join('')}</select></div><div class="field"><label>סטטוס</label><select name="done"><option value="false" ${!task.done?'selected':''}>פתוחה</option><option value="true" ${task.done?'selected':''}>בוצעה</option></select></div><div class="field full"><label>הערות</label><textarea name="notes">${esc(task.notes||'')}</textarea></div></div><div class="notice" style="margin-top:12px">השינויים חלים רק על המשימה הזאת.</div><div class="actions" style="margin-top:14px"><button class="btn">שמירה</button><button type="button" class="btn danger" onclick="App.deletePlanTask('${esc(task.key)}')">מחיקה</button><button type="button" class="btn ghost" onclick="App.close()">ביטול</button></div></form>`);document.getElementById('planTaskForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target),updates={text:String(f.get('text')||'').trim(),date:String(f.get('date')||task.date),time:String(f.get('time')||task.time),duration:Number(f.get('duration')||30),passiveMin:Number(f.get('passive')||0),type:String(f.get('type')||task.type),notes:String(f.get('notes')||'')};if(task.manual){const manual=state.manualTasks.find(t=>t.key===key);if(manual)Object.assign(manual,updates);delete state.planOverrides[key]}else state.planOverrides[key]={...(state.planOverrides[key]||{}),...updates};state.checkedTasks[key]=f.get('done')==='true';await persist();close();render()}}
-async function deletePlanTask(key){const task=generatedTasks().find(t=>t.key===key);if(!task)return;if(!confirm(`למחוק את המשימה „${task.text}”?`))return;if(task.manual)state.manualTasks=state.manualTasks.filter(t=>t.key!==key);else state.hiddenPlanTasks[key]=true;delete state.planOverrides[key];delete state.checkedTasks[key];await persist();close();render()}
+function editPlanTask(key){const task=generatedTasks().find(t=>t.key===key);if(!task)return;modal('עריכת משימה',`<form id="planTaskForm"><div class="form-grid"><div class="field full"><label>שם המשימה</label><input name="text" required value="${esc(task.text||'')}"></div><div class="field"><label>תאריך</label><input name="date" type="date" value="${esc(task.date)}"></div><div class="field"><label>שעה</label><input name="time" type="time" value="${esc(task.time)}"></div><div class="field"><label>זמן פעיל בדקות</label><input name="duration" type="number" min="5" step="5" value="${task.duration||30}"></div><div class="field"><label>זמן פסיבי אחריו</label><input name="passive" type="number" min="0" step="5" value="${task.passiveMin||0}"></div><div class="field"><label>סוג המשימה</label><select name="type">${Object.entries(TASK_TYPES).map(([k,v])=>`<option value="${k}" ${task.type===k?'selected':''}>${v}</option>`).join('')}</select></div><div class="field"><label>סטטוס</label><select name="done"><option value="false" ${!task.done?'selected':''}>פתוחה</option><option value="true" ${task.done?'selected':''}>בוצעה</option></select></div><div class="field full"><label>הערות</label><textarea name="notes">${esc(task.notes||'')}</textarea></div></div><div class="notice" style="margin-top:12px">${task.todoId?'המשימה מסונכרנת עם To Do List. שינוי כאן יתעדכן גם שם.':'השינויים חלים רק על המשימה הזאת.'}</div><div class="actions" style="margin-top:14px"><button class="btn">שמירה</button><button type="button" class="btn danger" onclick="App.deletePlanTask('${esc(task.key)}')">מחיקה</button><button type="button" class="btn ghost" onclick="App.close()">ביטול</button></div></form>`);document.getElementById('planTaskForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target),updates={text:String(f.get('text')||'').trim(),date:String(f.get('date')||task.date),time:String(f.get('time')||task.time),duration:Number(f.get('duration')||30),passiveMin:Number(f.get('passive')||0),type:String(f.get('type')||task.type),notes:String(f.get('notes')||'')};if(task.todoId){const item=state.todoItems.find(x=>x.id===task.todoId);if(item){item.text=updates.text;item.dueDate=updates.date;item.plannerTime=updates.time;item.plannerDuration=updates.duration;item.plannerPassiveMin=updates.passiveMin;item.plannerType=updates.type;item.notes=updates.notes;item.done=f.get('done')==='true'}}else if(task.manual){const manual=state.manualTasks.find(t=>t.key===key);if(manual)Object.assign(manual,updates);delete state.planOverrides[key];state.checkedTasks[key]=f.get('done')==='true'}else{state.planOverrides[key]={...(state.planOverrides[key]||{}),...updates};state.checkedTasks[key]=f.get('done')==='true'}await persist();close();render()}}
+async function deletePlanTask(key){const task=generatedTasks().find(t=>t.key===key);if(!task)return;if(!confirm(`למחוק את המשימה „${task.text}”?`))return;if(task.todoId)state.todoItems=state.todoItems.filter(t=>t.id!==task.todoId);else if(task.manual)state.manualTasks=state.manualTasks.filter(t=>t.key!==key);else state.hiddenPlanTasks[key]=true;delete state.planOverrides[key];delete state.checkedTasks[key];await persist();close();render()}
 function manualTaskForm(){modal('משימה ידנית חדשה',`<form id="manualTaskForm"><div class="form-grid"><div class="field full"><label>משימה</label><input name="text" required placeholder="למשל: הדפסת מדבקות"></div><div class="field"><label>תאריך</label><input name="date" type="date" required value="${plannerDay||dayKey(new Date())}"></div><div class="field"><label>שעה</label><input name="time" type="time" value="${state.settings.workStart||'08:00'}"></div><div class="field"><label>משך בדקות</label><input name="duration" type="number" min="5" step="5" value="30"></div><div class="field"><label>סוג</label><select name="type">${Object.entries(TASK_TYPES).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div></div><div class="actions" style="margin-top:14px"><button class="btn">הוספה</button><button type="button" class="btn ghost" onclick="App.close()">ביטול</button></div></form>`);document.getElementById('manualTaskForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target),key=id('manual');state.manualTasks.push({key,text:f.get('text'),date:f.get('date'),time:f.get('time'),duration:Number(f.get('duration')||30),type:f.get('type'),recipe:'',customer:'',recipeRuns:0,qty:0,source:'',manual:true});await persist();close();render()}}
 
 function renderRecipes(){
@@ -1133,8 +1258,8 @@ function renderTodo(){
   document.getElementById('view-todo').innerHTML=`<div class="section-head"><div><h2>To Do List</h2><div class="hint">משימות שהגדרת במתכונים מופיעות כאן ובתכנון הלו״ז כאותה משימה מסונכרנת.</div></div><button class="btn secondary" onclick="App.newTodo()">+ משימה אישית</button></div><div class="grid three todo-summary"><div class="metric"><div class="label">משימות פתוחות</div><div class="value">${open.length}</div></div><div class="metric"><div class="label">להיום</div><div class="value">${open.filter(x=>x.dueDate===today).length}</div></div><div class="metric"><div class="label">הושלמו</div><div class="value">${done.length}</div></div></div><div class="card" style="margin-top:16px"><div class="section-head"><h2>לביצוע</h2></div><div class="todo-list">${open.map(itemHtml).join('')||'<div class="empty">אין משימות פתוחות 🎉</div>'}</div>${done.length?`<details class="todo-completed"><summary>הושלמו (${done.length})</summary><div class="todo-list">${done.map(itemHtml).join('')}</div></details>`:''}</div>`;
 }
 function todoForm(item={}){
-  modal(item.id?'עריכת משימה':'משימה חדשה',`<form id="todoForm"><div class="form-grid"><div class="field full"><label>מה צריך לעשות?</label><input name="text" required maxlength="180" value="${esc(item.text||'')}" placeholder="לדוגמה: להזמין שקיות אריזה"></div><div class="field"><label>עדיפות</label><select name="priority">${['נמוכה','רגילה','גבוהה'].map(v=>`<option ${v===(item.priority||'רגילה')?'selected':''}>${v}</option>`).join('')}</select></div><div class="field"><label>תאריך יעד</label><input name="dueDate" type="date" value="${esc(item.dueDate||'')}"></div><div class="field full"><label>הערות</label><textarea name="notes" rows="3" placeholder="פרטים נוספים, טלפון, כמות או כל דבר שחשוב לזכור">${esc(item.notes||'')}</textarea></div></div><div class="actions" style="margin-top:14px"><button class="btn">שמירה</button><button type="button" class="btn ghost" onclick="App.close()">ביטול</button></div></form>`);
-  document.getElementById('todoForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),text=String(f.get('text')||'').trim();if(!text)return;const next={id:item.id||id('todo'),text,priority:String(f.get('priority')||'רגילה'),dueDate:String(f.get('dueDate')||''),notes:String(f.get('notes')||'').trim(),done:!!item.done,createdAt:item.createdAt||new Date().toISOString()};if(item.id)state.todoItems=state.todoItems.map(x=>x.id===item.id?next:x);else state.todoItems.push(next);await persist();close();render()};
+  modal(item.id?'עריכת משימה':'משימה חדשה',`<form id="todoForm"><div class="form-grid"><div class="field full"><label>מה צריך לעשות?</label><input name="text" required maxlength="180" value="${esc(item.text||'')}" placeholder="לדוגמה: להזמין שקיות אריזה"></div><div class="field"><label>עדיפות</label><select name="priority">${['נמוכה','רגילה','גבוהה'].map(v=>`<option ${v===(item.priority||'רגילה')?'selected':''}>${v}</option>`).join('')}</select></div><div class="field"><label>תאריך יעד</label><input name="dueDate" type="date" value="${esc(item.dueDate||'')}"><div class="hint">משימה עם תאריך יעד תופיע אוטומטית גם בתכנון השבועי.</div></div><div class="field full"><label>הערות</label><textarea name="notes" rows="3" placeholder="פרטים נוספים, טלפון, כמות או כל דבר שחשוב לזכור">${esc(item.notes||'')}</textarea></div></div><div class="actions" style="margin-top:14px"><button class="btn">שמירה</button><button type="button" class="btn ghost" onclick="App.close()">ביטול</button></div></form>`);
+  document.getElementById('todoForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),text=String(f.get('text')||'').trim();if(!text)return;const next={id:item.id||id('todo'),text,priority:String(f.get('priority')||'רגילה'),dueDate:String(f.get('dueDate')||''),notes:String(f.get('notes')||'').trim(),done:!!item.done,plannerTime:String(item.plannerTime||''),plannerDuration:Math.max(5,Number(item.plannerDuration||30)),plannerPassiveMin:Math.max(0,Number(item.plannerPassiveMin||0)),plannerType:TASK_TYPES[item.plannerType]?item.plannerType:'prep',createdAt:item.createdAt||new Date().toISOString()};if(item.id)state.todoItems=state.todoItems.map(x=>x.id===item.id?next:x);else state.todoItems.push(next);await persist();close();render()};
 }
 function renderReports(){const os=state.orders.filter(o=>o.status!=='בוטלה'),rev=os.reduce((s,o)=>s+revenue(o),0);let cost=0,by={};os.forEach(o=>(o.items||[]).forEach(i=>{const r=recipe(i.recipeId);if(r)cost+=recipeCost(r).perUnit*Number(i.qty);by[i.recipeId]=(by[i.recipeId]||0)+Number(i.qty)}));const profit=rev-cost;document.getElementById('view-reports').innerHTML=`<div class="grid four"><div class="metric"><div class="label">הכנסות</div><div class="value">${money(rev)}</div></div><div class="metric"><div class="label">עלות חומרי גלם</div><div class="value">${money(cost)}</div></div><div class="metric"><div class="label">רווח גולמי</div><div class="value">${money(profit)}</div></div><div class="metric"><div class="label">שיעור רווח</div><div class="value">${rev?fmt(profit/rev*100,1):0}%</div></div></div><div class="grid two" style="margin-top:14px"><div class="card"><h2>מוצרים נמכרים</h2>${Object.entries(by).sort((a,b)=>b[1]-a[1]).map(([rid,q])=>`<div class="kpi-line"><span>${esc(recipe(rid)?.name||'מתכון')}</span><strong>${fmt(q,0)} שקיות</strong></div>`).join('')||'<div class="empty">אין נתונים</div>'}</div><div class="card"><h2>רווחיות מתכונים</h2>${state.recipes.map(r=>{const c=recipeCost(r);return`<div class="kpi-line"><span>${esc(r.name)}</span><strong>${money(Number(r.salePrice)-c.perUnit)} לשקית</strong></div>`}).join('')||'<div class="empty">אין מתכונים</div>'}</div></div><div class="card" style="margin-top:14px"><div class="notice">זהו אומדן של חומרי גלם ופחת שהוגדר במתכונים. שכר עבודה, שכירות, מסים, עמלות והוצאות קבועות אינם נכללים.</div></div>`}
 
@@ -1221,7 +1346,7 @@ window.App={
   addSubRecipe:()=>{document.getElementById('subRecipes').insertAdjacentHTML('beforeend',subRecipeCard());updateRecipeWeightPreview()},addSubIngredient:b=>{b.parentElement.querySelector('.sub-ingredients').insertAdjacentHTML('beforeend',ingredientRow({name:'',qty:'',unit:'גרם',category:'אחר'},true));updateRecipeWeightPreview()},addSubStep:b=>b.parentElement.querySelector('.sub-steps').insertAdjacentHTML('beforeend',stepRow({text:'',daysBefore:3,time:'',durationMin:0},true)),updateRecipeWeightPreview,
   weightCalc:x=>weightCalculator(state.recipes.find(r=>r.id===x)),saveRecipeScale:saveScaledRecipe,resetRecipeOriginal:resetRecipeToOriginal,scaleMode:(mode,button)=>{window.__scaleMode=mode;document.getElementById('scaleWeightField').hidden=mode!=='weight';document.getElementById('scaleBagsField').hidden=mode!=='bags';button.parentElement.querySelectorAll('button').forEach(b=>b.classList.toggle('active',b===button));window.__updateScale?.()},
   importRecipe:importRecipeModal,analyzeRecipeImport,openPendingRecipe:()=>{const r=pendingImport;pendingImport=null;close();recipeForm(r)},filterRecipeBook,openBookRecipe,openSubRecipeFromIngredient,switchBookPane:(pane,button)=>{document.querySelectorAll('.book-pane').forEach(x=>x.classList.toggle('active',x.id===`book-${pane}`));button.parentElement.querySelectorAll('button').forEach(b=>b.classList.toggle('active',b===button))},copyRecipe:async x=>{const r=recipe(x);try{await navigator.clipboard.writeText(recipePlainText(r));setStatus('✓ המתכון הועתק')}catch(e){alert(recipePlainText(r))}},
-  toggleTask:async k=>{state.checkedTasks[k]=!state.checkedTasks[k];await persist();render()},toggleShopping:async k=>{state.checkedShopping[k]=!state.checkedShopping[k];await persist();render()},
+  toggleTask:async k=>{if(String(k).startsWith('todo:')){const item=state.todoItems.find(x=>`todo:${x.id}`===k);if(item)item.done=!item.done}else state.checkedTasks[k]=!state.checkedTasks[k];await persist();render()},toggleShopping:async k=>{state.checkedShopping[k]=!state.checkedShopping[k];await persist();render()},
   scrollTabs,editAvailability:availabilityModal,addAvailability:day=>document.getElementById(`avail-${day}`).insertAdjacentHTML('beforeend',availabilityRow(day)),workflowEditor,addWorkflowTask:()=>document.getElementById('workflowRows').insertAdjacentHTML('beforeend',workflowRow()),editTabOrder:tabOrderEditor,saveTabOrder:async()=>{state.settings.tabOrder=[...document.querySelectorAll('#tabOrderList .tab-order-item')].map(x=>x.dataset.view);await persist();close();initTabOrder();render()},resetTabOrder:async()=>{state.settings.tabOrder=[];await persist();location.reload()},
   plannerPrev:()=>{plannerWeekOffset--;render()},plannerNext:()=>{plannerWeekOffset++;render()},plannerToday:()=>{plannerWeekOffset=0;plannerDay=dayKey(new Date());render()},setPlannerMode:m=>{plannerMode=m;render()},setPlannerDay:d=>{plannerDay=d;render()},buildPlan:async()=>{state.planOverrides={};await persist();render();setStatus('✓ התוכנית נבנתה מחדש')},newManualTask:manualTaskForm,editPlanTask,deletePlanTask,dragPlanTask:(e,key)=>{draggedTaskKey=key;e.dataTransfer.setData('text/plain',key);e.dataTransfer.effectAllowed='move'},dragOverPlanTask,dropPlanTaskAt,clearPlannerDropHint,startTouchPlanDrag,moveTouchPlanDrag,endTouchPlanDrag,deleteManualTask:deletePlanTask,
   newInventory:()=>inventoryForm(),editInventory:x=>inventoryForm(state.inventory.find(i=>i.id===x)),adjustInventory,setInventoryCount,productionSummary:productionSummaryForm,undoProductionLog,deleteInventory:async x=>{if(confirm('למחוק את הפריט?')){state.inventory=state.inventory.filter(i=>i.id!==x);await persist();render()}},
@@ -1268,7 +1393,7 @@ function initServiceWorkerUpdates(){
   };
   window.addEventListener('load',async()=>{
     try{
-      const registration=await navigator.serviceWorker.register('./sw.js?v=1100',{updateViaCache:'none'});
+      const registration=await navigator.serviceWorker.register('./sw.js?v=1140',{updateViaCache:'none'});
       inspect(registration);
       await registration.update();
       const check=()=>registrationRef?.update().catch(()=>{});

@@ -386,3 +386,5 @@ html{background:var(--cream)}body{background:radial-gradient(circle at 8% 8%,rgb
 
 /* v11.2 — restore recipe editor row renderers */
 .recipe-order-task-row{align-items:end}.subrecipe-card{margin-top:14px;padding:16px;border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,.68)}
+
+/* v11.3 — more flexible recipe import parser: main subsections vs real sub-recipes */
