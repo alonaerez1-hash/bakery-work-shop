@@ -1,0 +1,41 @@
+name: Apply Bakery Workspace v11.5
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.upload-v115/READY'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble v11.5 files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .upload-v115/app.js.part-* > app.js
+          cat .upload-v115/styles.css.part-* > styles.css
+          cp .upload-v115/index.html index.html
+          cp .upload-v115/manifest.json manifest.json
+          cp .upload-v115/sw.js sw.js
+          test "$(git hash-object app.js)" = "533740eb51a18fb4d5f2ae6c7633ed900a2ef1d2"
+          test "$(git hash-object index.html)" = "2cd6fd06d40f66e1fd1bb7dc32bf0779af7da749"
+          test "$(git hash-object manifest.json)" = "1c7c4b6e0f0b9a06859fffb7b7c6cb568ba11891"
+          test "$(git hash-object styles.css)" = "e87ad0086fc38b69515e965db52e96dbf409e1da"
+          test "$(git hash-object sw.js)" = "002646cfffc8c32477b11414598356914ac5e96c"
+      - name: Commit v11.5
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .upload-v115
+          rm -f .github/workflows/apply-v115.yml
+          git config user.name "Bakery Workspace Updater"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "11.5"
+          git push
