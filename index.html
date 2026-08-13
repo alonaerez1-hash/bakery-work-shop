@@ -10,8 +10,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>Bakery Workspace — Luxury Bakery Studio</title>
-<link rel="manifest" href="manifest.json?v=1210">
-<link rel="stylesheet" href="styles.css?v=1210">
+<link rel="manifest" href="manifest.json?v=1220">
+<link rel="stylesheet" href="styles.css?v=1220">
 </head>
 <body>
 <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
@@ -23,6 +23,7 @@
 <div class="tabs-shell"><button class="tabs-scroll tabs-scroll-left" type="button" aria-label="הצגת הלשוניות שמשמאל" onclick="App.scrollTabs('left')">‹</button><nav class="tabs" id="tabs" aria-label="ניווט ראשי">
   <button data-view="dashboard" class="active"><span>⌂</span>לוח ראשי</button>
   <button data-view="orders"><span>◇</span>הזמנות</button>
+  <button data-view="sales"><span>◈</span>אירועי מכירה</button>
   <button data-view="planner"><span>▦</span>תכנון שבועי</button>
   <button data-view="recipes"><span>✎</span>מתכונים</button>
   <button data-view="recipebook"><span>▤</span>ספר מתכונים</button>
@@ -37,6 +38,7 @@
 <main>
   <section class="view active" id="view-dashboard"></section>
   <section class="view" id="view-orders"></section>
+  <section class="view" id="view-sales"></section>
   <section class="view" id="view-planner"></section>
   <section class="view" id="view-assistant"></section>
   <section class="view" id="view-recipes"></section>
@@ -54,8 +56,8 @@
 <div class="modal" id="modal" role="dialog" aria-modal="true"><div class="modal-card"><div class="modal-head"><h2 id="modalTitle"></h2><button class="icon-btn" id="modalClose" aria-label="סגירה">✕</button></div><div id="modalBody"></div></div></div>
 <input type="file" id="importFile" accept="application/json" hidden>
 <input type="file" id="ramiImportFile" accept=".gz,.xml,application/gzip,application/xml,text/xml" hidden>
-<script src="pako_inflate.min.js?v=1210"></script>
+<script src="pako_inflate.min.js?v=1220"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="app.js?v=1210"></script>
+<script src="app.js?v=1220"></script>
 </body>
 </html>
