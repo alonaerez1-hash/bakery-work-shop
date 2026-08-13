@@ -39,7 +39,7 @@ function salesUnitSingular(unit){return({'שקיות':'שקית','יחידות':
 function showShoppingQty(q,u){if(u==='גרם')return`${Math.ceil(Math.max(0,Number(q||0))).toLocaleString('he-IL')} גרם`;return showQty(q,u)}
 function setStatus(text){const el=document.getElementById('saveStatus');if(el)el.textContent=text||''}
 let saveFeedbackButton=null;
-let modalDirty=false,modalPointerDown=null,modalPointerMoved=false,modalSuppressNextBackdropClick=false;
+let modalDirty=false,modalPointerDown=null,modalPointerMoved=false,modalSuppressNextBackdropClick=false,modalSaveInProgress=false;
 function showToast(text,type='success'){let box=document.getElementById('appToastStack');if(!box){box=document.createElement('div');box.id='appToastStack';box.className='toast-stack';document.body.appendChild(box)}const toast=document.createElement('div');toast.className=`app-toast ${type}`;toast.innerHTML=`<span>${type==='success'?'✓':'!'}</span><strong>${esc(text)}</strong>`;box.appendChild(toast);requestAnimationFrame(()=>toast.classList.add('show'));setTimeout(()=>{toast.classList.remove('show');setTimeout(()=>toast.remove(),260)},2600)}
 function showSaveOverlay(message='נשמר בהצלחה!',ok=true){
   let overlay=document.getElementById('saveSuccessOverlay');
@@ -150,27 +150,55 @@ function load(){try{return migrateState(decodeLocalState(localStorage.getItem(LS
 let state=load();
 function localStateSnapshot(){return{...state,priceImports:(state.priceImports||[]).map(imp=>({...imp,items:[]})),aiMessages:(state.aiMessages||[]).slice(-10)}}
 function saveLocalSnapshot(){
-  const snapshot=localStateSnapshot(),normal=JSON.stringify(snapshot);
-  try{localStorage.setItem(LS_KEY,normal);return true}catch(firstError){
-    console.warn('regular local save failed, retrying compressed',firstError);
-    const old=localStorage.getItem(LS_KEY);
-    try{const compressed=encodeLocalState(snapshot);localStorage.removeItem(LS_KEY);localStorage.setItem(LS_KEY,compressed);return true}catch(secondError){
+  const snapshot=localStateSnapshot(),old=(()=>{try{return localStorage.getItem(LS_KEY)}catch(_e){return null}})();
+  try{
+    const compact=encodeLocalState(snapshot);
+    localStorage.setItem(LS_KEY,compact);return true
+  }catch(firstError){
+    console.warn('compact local save failed, retrying after cleanup',firstError);
+    try{
+      for(let i=localStorage.length-1;i>=0;i--){const key=localStorage.key(i);if(key&&/^bakery_os_state_/i.test(key)&&key!==LS_KEY)localStorage.removeItem(key)}
+      localStorage.removeItem(LS_KEY);
+      localStorage.setItem(LS_KEY,JSON.stringify(snapshot));return true
+    }catch(secondError){
       console.error(secondError);try{if(old!==null)localStorage.setItem(LS_KEY,old)}catch(_restore){}return false
     }
   }
 }
 
+const DEVICE_DB='bakery_workspace_device_v1',DEVICE_STORE='snapshots',DEVICE_STATE_KEY='current';
+function openDeviceDB(){
+  return new Promise((resolve,reject)=>{
+    if(!('indexedDB'in window))return reject(new Error('IndexedDB unavailable'));
+    const request=indexedDB.open(DEVICE_DB,1);
+    request.onupgradeneeded=()=>{const db=request.result;if(!db.objectStoreNames.contains(DEVICE_STORE))db.createObjectStore(DEVICE_STORE)};
+    request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error||new Error('IndexedDB open failed'));
+  });
+}
+async function saveIndexedSnapshot(snapshot=localStateSnapshot()){
+  let db;try{db=await openDeviceDB();return await new Promise((resolve,reject)=>{const tx=db.transaction(DEVICE_STORE,'readwrite');tx.objectStore(DEVICE_STORE).put(snapshot,DEVICE_STATE_KEY);tx.oncomplete=()=>resolve(true);tx.onerror=()=>reject(tx.error||new Error('IndexedDB save failed'));tx.onabort=()=>reject(tx.error||new Error('IndexedDB save aborted'))})}catch(error){console.warn('IndexedDB backup failed',error);return false}finally{try{db?.close()}catch(_e){}}
+}
+async function loadIndexedSnapshot(){
+  let db;try{db=await openDeviceDB();return await new Promise((resolve,reject)=>{const tx=db.transaction(DEVICE_STORE,'readonly'),request=tx.objectStore(DEVICE_STORE).get(DEVICE_STATE_KEY);request.onsuccess=()=>resolve(request.result||null);request.onerror=()=>reject(request.error||new Error('IndexedDB read failed'))})}catch(error){console.warn('IndexedDB restore unavailable',error);return null}finally{try{db?.close()}catch(_e){}}
+}
+async function restoreDeviceSnapshot(){
+  const backup=await loadIndexedSnapshot();if(!backup)return false;
+  const localTime=Date.parse(state.updatedAt||0)||0,backupTime=Date.parse(backup.updatedAt||0)||0;
+  if(!hasBusinessData(state)||backupTime>localTime){state=migrateState(backup);saveLocalSnapshot();return true}return false;
+}
+
 async function persist(sync=true){
   state.updatedAt=new Date().toISOString();
-  const localOk=saveLocalSnapshot();let cloudOk=true,cloudAttempted=!!(sync&&cloud.user);
-  if(localOk){setStatus('✓ נשמר');setTimeout(()=>setStatus(''),1200)}
+  const snapshot=localStateSnapshot(),localOk=saveLocalSnapshot(),indexedOk=await saveIndexedSnapshot(snapshot);let cloudOk=true,cloudAttempted=!!(sync&&cloud.user);
+  const deviceOk=localOk||indexedOk;
+  if(deviceOk){setStatus('✓ נשמר');setTimeout(()=>setStatus(''),1200)}
   if(cloudAttempted)cloudOk=await pushCloud();
-  const saved=localOk||(cloudAttempted&&cloudOk);
+  const saved=deviceOk||(cloudAttempted&&cloudOk);
   if(saved)modalDirty=false;
   if(!saved){setStatus('⚠ השמירה נכשלה');showToast('השמירה נכשלה','error');showSaveOverlay('השמירה נכשלה',false)}
-  else if(!localOk&&cloudAttempted&&cloudOk){setStatus('✓ נשמר בענן');showToast('נשמר בענן ✓','success');showSaveOverlay('נשמר בענן ✓',true)}
+  else if(!deviceOk&&cloudAttempted&&cloudOk){setStatus('✓ נשמר בענן');showToast('נשמר בענן ✓','success');showSaveOverlay('נשמר בענן ✓',true)}
   if(saveFeedbackButton){
-    if(saved)finishSaveFeedback(true,localOk?'נשמר בהצלחה':'נשמר בענן');
+    if(saved)finishSaveFeedback(true,deviceOk?'נשמר בהצלחה':'נשמר בענן');
     else finishSaveFeedback(false,'השמירה נכשלה');
   }
   return saved;
@@ -800,15 +828,19 @@ function openPlanner(){plannerMode='week';plannerWeekOffset=0;go('planner')}
 function modal(title,html){
   const root=document.getElementById('modal'),body=document.getElementById('modalBody');
   document.getElementById('modalTitle').textContent=title;body.innerHTML=html;
-  modalDirty=false;modalPointerDown=null;modalPointerMoved=false;modalSuppressNextBackdropClick=false;
+  modalDirty=false;modalPointerDown=null;modalPointerMoved=false;modalSuppressNextBackdropClick=false;modalSaveInProgress=false;
   root.classList.add('open');
 }
 function markModalDirty(){if(document.getElementById('modal')?.classList.contains('open'))modalDirty=true}
 function close(force=false){
   const root=document.getElementById('modal');if(!root?.classList.contains('open'))return true;
+  if(modalSaveInProgress&&!force)return false;
   if(!force&&modalDirty&&!confirm('יש שינויים שלא נשמרו. לצאת בלי לשמור?'))return false;
-  root.classList.remove('open');modalDirty=false;modalPointerDown=null;modalPointerMoved=false;modalSuppressNextBackdropClick=false;return true;
+  root.classList.remove('open');modalDirty=false;modalPointerDown=null;modalPointerMoved=false;modalSuppressNextBackdropClick=false;modalSaveInProgress=false;return true;
 }
+function beginModalSave(){if(modalSaveInProgress)return false;modalSaveInProgress=true;modalSuppressNextBackdropClick=true;return true}
+function endModalSave(saved=false){modalSaveInProgress=false;if(saved)modalDirty=false;else modalSuppressNextBackdropClick=false}
+
 function modalPointerStart(e){
   const root=document.getElementById('modal');if(!root?.classList.contains('open'))return;
   modalPointerDown={x:Number(e.clientX||0),y:Number(e.clientY||0),startedOnBackdrop:e.target===root,startedInside:e.target!==root};modalPointerMoved=false;
@@ -824,6 +856,7 @@ function modalPointerEnd(e){
 }
 function modalBackdropClick(e){
   const root=document.getElementById('modal');if(e.target!==root)return;
+  if(modalSaveInProgress)return;
   if(modalSuppressNextBackdropClick){modalSuppressNextBackdropClick=false;return}
   if(modalPointerMoved){modalPointerMoved=false;return}
   close();
@@ -1161,7 +1194,7 @@ function recipeForm(raw={}){
   <div class="recipe-editor-footer"><button type="button" id="recipeEditorPrev" class="btn ghost" onclick="App.moveRecipeEditor(-1)">חזרה</button><div class="recipe-editor-footer-main"><button type="button" class="btn ghost" onclick="App.close()">ביטול</button><button type="submit" class="btn">שמירת מתכון</button><button type="button" id="recipeEditorNext" class="btn secondary" onclick="App.moveRecipeEditor(1)">הבא</button></div></div></form>`);
   window.__recipeEditorMode='quick';window.__recipeEditorStep=1;
   const form=document.getElementById('recipeForm');form.addEventListener('input',updateRecipeWeightPreview);form.addEventListener('change',updateRecipeWeightPreview);updateRecipeWeightPreview();refreshRecipeEditorSteps();showRecipeEditorStep(1);
-  form.onsubmit=async e=>{e.preventDefault();if(!form.checkValidity()){const invalid=form.querySelector(':invalid'),section=invalid?.closest('.recipe-editor-step');if(section)showRecipeEditorStep(Number(section.dataset.recipeStep));invalid?.reportValidity();invalid?.focus();return}const f=new FormData(form),ex=state.recipes.find(x=>x.id===f.get('id')),ingredients=readRecipeFormIngredients(),steps=readStepRows(document.getElementById('recipeSteps')),bakingSteps=readStepRows(document.getElementById('recipeBakingSteps')),subRecipes=readSubRecipes(),productionTasks=readRecipeOrderTasks(),packageWeight=Math.max(1,Math.round(Number(f.get('packageWeight')||200))),salesUnit=SALES_UNITS.includes(String(f.get('salesUnit')))?String(f.get('salesUnit')):'שקיות';subRecipes.forEach(sub=>{const mainIngredient=ingredients.find(i=>i.linkedSubRecipeId===sub.id||ingredientNamesMatch(i.name,sub.name));if(mainIngredient){mainIngredient.linkedSubRecipeId=sub.id;sub.usedQtyGrams=ingredientWeightData(mainIngredient).grams||sub.usedQtyGrams}else if(sub.usedQtyGrams>0){ingredients.push({name:sub.name,qty:sub.usedQtyGrams,unit:'גרם',category:'תוספות',linkedSubRecipeId:sub.id})}});const weight=calculateIngredientListWeight(ingredients,Number(f.get('evaporationPct')||0)),fullBags=Math.floor(weight.finalWeight/packageWeight),yieldUnits=Math.max(0,Math.round(Number(f.get('yieldUnits')||0)));const categorySelect=form.elements.category,categoryManual=categorySelect?.dataset.manual==='true',category=categoryManual?String(f.get('category')||'אחר'):recipeCategoryFromText(`${f.get('name')||''} ${ingredients.map(i=>i.name).join(' ')}`);const obj=migrateRecipe({id:f.get('id')||id('rec'),name:f.get('name'),category:category==='אחר'&&f.get('category')?f.get('category'):category,categoryManual,salesUnit,packageWeight,yieldUnits,unitWeight:packageWeight,evaporationPct:Number(f.get('evaporationPct')||0),prepMin:Number(f.get('prepMin')||0),restMin:Number(f.get('restMin')||0),bakeMin:Number(f.get('bakeMin')||0),ovenTemp:Number(f.get('ovenTemp')||0),traysPerBatch:Number(f.get('traysPerBatch')||1),unitsPerTray:Number(f.get('unitsPerTray')||1),shelfLifeDays:Number(f.get('shelfLifeDays')||0),wastePct:Number(f.get('wastePct')||0),salePrice:Number(f.get('salePrice')||0),allergens:f.get('allergens'),notes:f.get('notes'),ingredients,steps,bakingSteps,subRecipes,productionTasks,warnings:[]});if(ex)Object.assign(ex,obj);else state.recipes.push(obj);saveFeedbackButton=e.submitter||form.querySelector('button[type=submit]');const ok=await persist();if(ok){close(true);render()}else{modalDirty=true;showSaveOverlay('לא הצלחנו לשמור עדיין — החלון נשאר פתוח',false)}};
+  form.onsubmit=async e=>{e.preventDefault();if(!beginModalSave())return;if(!form.checkValidity()){endModalSave(false);const invalid=form.querySelector(':invalid'),section=invalid?.closest('.recipe-editor-step');if(section)showRecipeEditorStep(Number(section.dataset.recipeStep));invalid?.reportValidity();invalid?.focus();return}const f=new FormData(form),ex=state.recipes.find(x=>x.id===f.get('id')),ingredients=readRecipeFormIngredients(),steps=readStepRows(document.getElementById('recipeSteps')),bakingSteps=readStepRows(document.getElementById('recipeBakingSteps')),subRecipes=readSubRecipes(),productionTasks=readRecipeOrderTasks(),packageWeight=Math.max(1,Math.round(Number(f.get('packageWeight')||200))),salesUnit=SALES_UNITS.includes(String(f.get('salesUnit')))?String(f.get('salesUnit')):'שקיות';subRecipes.forEach(sub=>{const mainIngredient=ingredients.find(i=>i.linkedSubRecipeId===sub.id||ingredientNamesMatch(i.name,sub.name));if(mainIngredient){mainIngredient.linkedSubRecipeId=sub.id;sub.usedQtyGrams=ingredientWeightData(mainIngredient).grams||sub.usedQtyGrams}else if(sub.usedQtyGrams>0){ingredients.push({name:sub.name,qty:sub.usedQtyGrams,unit:'גרם',category:'תוספות',linkedSubRecipeId:sub.id})}});const weight=calculateIngredientListWeight(ingredients,Number(f.get('evaporationPct')||0)),fullBags=Math.floor(weight.finalWeight/packageWeight),yieldUnits=Math.max(0,Math.round(Number(f.get('yieldUnits')||0)));const categorySelect=form.elements.category,categoryManual=categorySelect?.dataset.manual==='true',category=categoryManual?String(f.get('category')||'אחר'):recipeCategoryFromText(`${f.get('name')||''} ${ingredients.map(i=>i.name).join(' ')}`);const obj=migrateRecipe({id:f.get('id')||id('rec'),name:f.get('name'),category:category==='אחר'&&f.get('category')?f.get('category'):category,categoryManual,salesUnit,packageWeight,yieldUnits,unitWeight:packageWeight,evaporationPct:Number(f.get('evaporationPct')||0),prepMin:Number(f.get('prepMin')||0),restMin:Number(f.get('restMin')||0),bakeMin:Number(f.get('bakeMin')||0),ovenTemp:Number(f.get('ovenTemp')||0),traysPerBatch:Number(f.get('traysPerBatch')||1),unitsPerTray:Number(f.get('unitsPerTray')||1),shelfLifeDays:Number(f.get('shelfLifeDays')||0),wastePct:Number(f.get('wastePct')||0),salePrice:Number(f.get('salePrice')||0),allergens:f.get('allergens'),notes:f.get('notes'),ingredients,steps,bakingSteps,subRecipes,productionTasks,warnings:[]});if(ex)Object.assign(ex,obj);else state.recipes.push(obj);saveFeedbackButton=e.submitter||form.querySelector('button[type=submit]');let ok=false;try{ok=await persist()}catch(error){console.error('recipe save failed',error);ok=false}if(ok){endModalSave(true);close(true);render()}else{endModalSave(false);modalDirty=true;showSaveOverlay('לא הצלחנו לשמור עדיין — החלון נשאר פתוח',false)}};
 }
 function normalizedRecipeUnit(unit=''){const clean=String(unit||'').trim().replace(/״/g,'"');if(clean==='קג'||clean==='קילו')return'ק"ג';if(clean==='מל')return'מ"ל';return UNITS.includes(clean)?clean:'גרם'}
 function roundRecipeQuantity(value,unit=''){
@@ -1585,9 +1618,9 @@ function getCloud(){try{return JSON.parse(localStorage.getItem(CLOUD_KEY)||'null
 function hasBusinessData(x){return !!((x.recipes&&x.recipes.length)||(x.orders&&x.orders.length)||(x.invoices&&x.invoices.length)||(x.inventory&&x.inventory.length)||(x.suppliers&&x.suppliers.length))}
 function initCloud(){const c=getCloud();if(!c?.url||!c?.key||!window.supabase)return false;cloud.client=window.supabase.createClient(c.url,c.key,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true,storageKey:'bakery-workspace-auth-v1'}});return true}
 function remoteIsNewer(updatedAt){return(Date.parse(updatedAt||0)||0)>(Date.parse(state.updatedAt||0)||0)+250}
-function applyRemote(data,updatedAt,show=true){if(!data)return;if(updatedAt&&!remoteIsNewer(updatedAt)&&hasBusinessData(state))return;state=migrateState({...data,updatedAt:updatedAt||data.updatedAt||new Date().toISOString()});localStorage.setItem(LS_KEY,JSON.stringify(localStateSnapshot()));if(show){setStatus('✓ התעדכן מהענן');setTimeout(()=>setStatus(''),1400)}render()}
+function applyRemote(data,updatedAt,show=true){if(!data)return;if(updatedAt&&!remoteIsNewer(updatedAt)&&hasBusinessData(state))return;state=migrateState({...data,updatedAt:updatedAt||data.updatedAt||new Date().toISOString()});saveLocalSnapshot();saveIndexedSnapshot(localStateSnapshot()).catch(()=>{});if(show){setStatus('✓ התעדכן מהענן');setTimeout(()=>setStatus(''),1400)}render()}
 async function cloudAuth(mode){const url=document.getElementById('cloudUrl')?.value.trim(),key=document.getElementById('cloudKey')?.value.trim(),email=document.getElementById('cloudEmail')?.value.trim(),password=document.getElementById('cloudPassword')?.value;if(!url||!key||!email||!password)return alert('יש למלא את כל פרטי החיבור');localStorage.setItem(CLOUD_KEY,JSON.stringify({url,key,email}));if(!initCloud())return alert('פרטי Supabase אינם תקינים');setStatus('מתחברת…');const res=mode==='signup'?await cloud.client.auth.signUp({email,password}):await cloud.client.auth.signInWithPassword({email,password});if(res.error){setStatus('⚠ ההתחברות נכשלה');return alert(res.error.message)}cloud.user=res.data.user;if(!cloud.user){setStatus('');return alert('נשלח אימייל אימות. אשרי אותו ואז התחברי.')}await initialCloudSync();startCloudSync();setStatus('✓ החיבור נשמר');render()}
-async function initialCloudSync(){if(!cloud.user||!cloud.client)return;setStatus('מסנכרן…');const {data,error}=await cloud.client.from('bakery_os_data').select('data,updated_at').eq('user_id',cloud.user.id).maybeSingle();if(error){setStatus('⚠ שגיאת סנכרון');throw error}if(data?.data){const localHas=hasBusinessData(state),remoteHas=hasBusinessData(data.data),localTime=Date.parse(state.updatedAt||0)||0,remoteTime=Date.parse(data.updated_at||data.data.updatedAt||0)||0;if(localHas&&(!remoteHas||localTime>remoteTime+250)){await pushCloud();setStatus('✓ הנתונים מהמכשיר נשמרו בענן')}else{state=migrateState({...data.data,updatedAt:data.updated_at||data.data.updatedAt});localStorage.setItem(LS_KEY,JSON.stringify(localStateSnapshot()));setStatus('✓ נטען מהענן')}}else if(hasBusinessData(state))await pushCloud();else{state.updatedAt=new Date().toISOString();await pushCloud()}}
+async function initialCloudSync(){if(!cloud.user||!cloud.client)return;setStatus('מסנכרן…');const {data,error}=await cloud.client.from('bakery_os_data').select('data,updated_at').eq('user_id',cloud.user.id).maybeSingle();if(error){setStatus('⚠ שגיאת סנכרון');throw error}if(data?.data){const localHas=hasBusinessData(state),remoteHas=hasBusinessData(data.data),localTime=Date.parse(state.updatedAt||0)||0,remoteTime=Date.parse(data.updated_at||data.data.updatedAt||0)||0;if(localHas&&(!remoteHas||localTime>remoteTime+250)){await pushCloud();setStatus('✓ הנתונים מהמכשיר נשמרו בענן')}else{state=migrateState({...data.data,updatedAt:data.updated_at||data.data.updatedAt});saveLocalSnapshot();saveIndexedSnapshot(localStateSnapshot()).catch(()=>{});setStatus('✓ נטען מהענן')}}else if(hasBusinessData(state))await pushCloud();else{state.updatedAt=new Date().toISOString();await pushCloud()}}
 async function pushCloud(){if(!cloud.user||!cloud.client)return false;const stamp=state.updatedAt||new Date().toISOString();state.updatedAt=stamp;const {error}=await cloud.client.from('bakery_os_data').upsert({user_id:cloud.user.id,data:state,updated_at:stamp},{onConflict:'user_id'});if(error){console.error(error);setStatus('⚠ השמירה בענן נכשלה');return false}return true}
 async function pullCloud(show=true){if(!cloud.user||!cloud.client)return;if(show)setStatus('טוען מהענן…');const {data,error}=await cloud.client.from('bakery_os_data').select('data,updated_at').eq('user_id',cloud.user.id).maybeSingle();if(error){if(show)setStatus('⚠ שגיאת טעינה');console.error(error);return}if(data?.data){if(remoteIsNewer(data.updated_at)||!hasBusinessData(state))applyRemote(data.data,data.updated_at,show);else if(show){setStatus('✓ כבר מעודכן');setTimeout(()=>setStatus(''),1200)}}}
 function stopCloudSync(){if(cloud.channel&&cloud.client)cloud.client.removeChannel(cloud.channel);cloud.channel=null;if(cloud.timer)clearInterval(cloud.timer);cloud.timer=null}
@@ -1616,6 +1649,8 @@ window.App={
   exportData,cloudLogin:()=>cloudAuth('login'),cloudSignup:()=>cloudAuth('signup'),pullCloud,logout:async()=>{stopCloudSync();if(cloud.client)await cloud.client.auth.signOut();cloud.user=null;setStatus('התנתקת מהענן');render()},resetAll:async()=>{if(confirm('למחוק את כל הנתונים?')){state=empty();await persist(false);render()}}
 };
 
+
+window.__BakeryModalDiagnostics=()=>({open:document.getElementById('modal')?.classList.contains('open')||false,dirty:modalDirty,saving:modalSaveInProgress,suppressBackdrop:modalSuppressNextBackdropClick});
 document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>go(b.dataset.view));
 const tabsEl=document.getElementById('tabs');
 if(tabsEl){tabsEl.addEventListener('scroll',updateTabScrollButtons,{passive:true});tabsEl.addEventListener('wheel',e=>{if(Math.abs(e.deltaY)>Math.abs(e.deltaX)){e.preventDefault();tabsEl.scrollLeft+=e.deltaY;}},{passive:false});window.addEventListener('resize',updateTabScrollButtons);setTimeout(updateTabScrollButtons,120);} 
@@ -1665,7 +1700,7 @@ function initServiceWorkerUpdates(){
   };
   window.addEventListener('load',async()=>{
     try{
-      const registration=await navigator.serviceWorker.register('./sw.js?v=1210',{updateViaCache:'none'});
+      const registration=await navigator.serviceWorker.register('./sw.js?v=1230',{updateViaCache:'none'});
       inspect(registration);
       await registration.update();
       const check=()=>registrationRef?.update().catch(()=>{});
@@ -1677,5 +1712,5 @@ function initServiceWorkerUpdates(){
   });
 }
 initServiceWorkerUpdates();
-initTabOrder();initSession().finally(render);
+initTabOrder();restoreDeviceSnapshot().catch(()=>false).then(()=>initSession()).finally(render);
 })();
