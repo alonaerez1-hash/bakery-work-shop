@@ -39,6 +39,7 @@ function salesUnitSingular(unit){return({'שקיות':'שקית','יחידות':
 function showShoppingQty(q,u){if(u==='גרם')return`${Math.ceil(Math.max(0,Number(q||0))).toLocaleString('he-IL')} גרם`;return showQty(q,u)}
 function setStatus(text){const el=document.getElementById('saveStatus');if(el)el.textContent=text||''}
 let saveFeedbackButton=null;
+let modalDirty=false,modalPointerDown=null,modalPointerMoved=false,modalSuppressNextBackdropClick=false;
 function showToast(text,type='success'){let box=document.getElementById('appToastStack');if(!box){box=document.createElement('div');box.id='appToastStack';box.className='toast-stack';document.body.appendChild(box)}const toast=document.createElement('div');toast.className=`app-toast ${type}`;toast.innerHTML=`<span>${type==='success'?'✓':'!'}</span><strong>${esc(text)}</strong>`;box.appendChild(toast);requestAnimationFrame(()=>toast.classList.add('show'));setTimeout(()=>{toast.classList.remove('show');setTimeout(()=>toast.remove(),260)},2600)}
 function showSaveOverlay(message='נשמר בהצלחה!',ok=true){
   let overlay=document.getElementById('saveSuccessOverlay');
@@ -144,6 +145,7 @@ async function persist(sync=true){
     localStorage.setItem(LS_KEY,JSON.stringify(localStateSnapshot()));setStatus('✓ נשמר');setTimeout(()=>setStatus(''),1200)
   }catch(e){localOk=false;console.error(e);setStatus('⚠ אין מקום לשמירה מקומית');showToast('השמירה המקומית נכשלה','error');showSaveOverlay('השמירה נכשלה',false)}
   if(sync&&cloud.user)cloudOk=await pushCloud();
+  if(localOk&&cloudOk)modalDirty=false;
   if(saveFeedbackButton){
     if(localOk&&cloudOk)finishSaveFeedback(true,'נשמר בהצלחה');
     else if(localOk&&!cloudOk)finishSaveFeedback(false,'נשמר במכשיר, אך השמירה בענן נכשלה');
@@ -335,7 +337,7 @@ function recipeCostBreakdown(recipeId){
   modal(`פירוט עלות — ${r.name}`,`<div class="cost-breakdown-head"><div><span>עלות חומרי גלם למתכון</span><strong>${money(c.total)}</strong></div><div><span>תפוקה</span><strong>${yieldCount?`${yieldCount} ${esc(unit)}`:'לא הוגדר'}</strong></div><div><span>עלות ל${esc(salesUnitSingular(unit))}</span><strong>${perUnitText}</strong></div></div><div class="notice">החישוב כולל חומרי גלם ופחת בלבד. שכר עבודה ועלות אריזה אינם נכללים.</div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>רכיב</th><th>כמות</th><th>מחיר שנמצא</th><th>עלות במתכון</th></tr></thead><tbody>${rows.map(i=>`<tr><td><strong>${esc(i.name)}</strong>${i.sourceSubRecipe?`<div class="meta">מתוך ${esc(i.sourceSubRecipe)}</div>`:''}</td><td>${fmtQty(i.qty,i.unit)} ${esc(normalizedRecipeUnit(i.unit))}</td><td>${i.detail?`${esc(i.detail.supplierName)} · ${money(i.detail.packPrice)} / ${fmtQty(i.detail.packQty,i.detail.unit)} ${esc(normalizedRecipeUnit(i.detail.unit))}`:'<span class="muted">אין מחיר תואם</span>'}</td><td class="money">${money(i.cost)}</td></tr>`).join('')}</tbody></table></div>`)
 }
 
-/* ניתוח מתכונים מקומי — v12.0: מספור שלבי הכנה מקבל קדימות על כותרות/הערות פנימיות */
+/* ניתוח מתכונים מקומי — v12.1: מספור שלבי הכנה מקבל קדימות על כותרות/הערות פנימיות */
 const FRACTION_VALUES={'½':.5,'¼':.25,'¾':.75,'⅓':1/3,'⅔':2/3,'⅛':.125,'⅜':.375,'⅝':.625,'⅞':.875,'חצי':.5,'רבע':.25,'שליש':1/3};
 const HEB_NUMBER_VALUES={'אחד':1,'אחת':1,'שני':2,'שתי':2,'שניים':2,'שתיים':2,'שלושה':3,'שלוש':3,'ארבעה':4,'ארבע':4,'חמישה':5,'חמש':5,'שישה':6,'שש':6,'שבעה':7,'שבע':7,'שמונה':8,'תשעה':9,'תשע':9,'עשרה':10,'עשר':10};
 const UNIT_ALIASES=[
@@ -763,8 +765,37 @@ function plannerSuggestions(tasks){
 }
 function go(view){if(view==='todo')view='production';currentView=view;document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id===`view-${view}`));document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('active',x.dataset.view===view));render();const active=document.querySelector(`#tabs button[data-view="${view}"]`);active?.scrollIntoView({behavior:'smooth',block:'nearest',inline:'center'});window.scrollTo({top:0,behavior:'smooth'})}
 function openPlanner(){plannerMode='week';plannerWeekOffset=0;go('planner')}
-function modal(title,html){document.getElementById('modalTitle').textContent=title;document.getElementById('modalBody').innerHTML=html;document.getElementById('modal').classList.add('open')}
-function close(){document.getElementById('modal').classList.remove('open')}
+function modal(title,html){
+  const root=document.getElementById('modal'),body=document.getElementById('modalBody');
+  document.getElementById('modalTitle').textContent=title;body.innerHTML=html;
+  modalDirty=false;modalPointerDown=null;modalPointerMoved=false;modalSuppressNextBackdropClick=false;
+  root.classList.add('open');
+}
+function markModalDirty(){if(document.getElementById('modal')?.classList.contains('open'))modalDirty=true}
+function close(force=false){
+  const root=document.getElementById('modal');if(!root?.classList.contains('open'))return true;
+  if(!force&&modalDirty&&!confirm('יש שינויים שלא נשמרו. לצאת בלי לשמור?'))return false;
+  root.classList.remove('open');modalDirty=false;modalPointerDown=null;modalPointerMoved=false;modalSuppressNextBackdropClick=false;return true;
+}
+function modalPointerStart(e){
+  const root=document.getElementById('modal');if(!root?.classList.contains('open'))return;
+  modalPointerDown={x:Number(e.clientX||0),y:Number(e.clientY||0),startedOnBackdrop:e.target===root,startedInside:e.target!==root};modalPointerMoved=false;
+}
+function modalPointerMove(e){
+  if(!modalPointerDown)return;const dx=Number(e.clientX||0)-modalPointerDown.x,dy=Number(e.clientY||0)-modalPointerDown.y;
+  if(Math.hypot(dx,dy)>8)modalPointerMoved=true;
+}
+function modalPointerEnd(e){
+  if(!modalPointerDown)return;
+  if(modalPointerDown.startedInside&&(modalPointerMoved||e.target===document.getElementById('modal')))modalSuppressNextBackdropClick=true;
+  modalPointerDown=null;
+}
+function modalBackdropClick(e){
+  const root=document.getElementById('modal');if(e.target!==root)return;
+  if(modalSuppressNextBackdropClick){modalSuppressNextBackdropClick=false;return}
+  if(modalPointerMoved){modalPointerMoved=false;return}
+  close();
+}
 function render(){document.getElementById('brandTitle').textContent=state.settings.businessName||'Bakery Workspace';({dashboard:renderDashboard,orders:renderOrders,invoices:renderInvoices,todo:renderProduction,planner:renderPlanner,assistant:renderAssistant,recipes:renderRecipes,recipebook:renderRecipeBook,production:renderProduction,shopping:renderShopping,inventory:renderInventory,suppliers:renderSuppliers,reports:renderReports,settings:renderSettings}[currentView]||renderDashboard)()}
 
 function taskHtml(t){return`<div class="task ${t.done?'done':''}"><input type="checkbox" ${t.done?'checked':''} onchange="App.toggleTask('${esc(t.key)}')"><div class="task-text"><strong>${esc(t.text)}</strong><div class="meta">${esc(t.recipe)} · ${t.recipeRuns||1} הכנות · ${fmt(t.qty,0)} שקיות · ${esc(t.customer)} ${t.time?'· '+esc(t.time):''}</div></div></div>`}
@@ -1528,7 +1559,17 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>go(b.dataset.
 const tabsEl=document.getElementById('tabs');
 if(tabsEl){tabsEl.addEventListener('scroll',updateTabScrollButtons,{passive:true});tabsEl.addEventListener('wheel',e=>{if(Math.abs(e.deltaY)>Math.abs(e.deltaX)){e.preventDefault();tabsEl.scrollLeft+=e.deltaY;}},{passive:false});window.addEventListener('resize',updateTabScrollButtons);setTimeout(updateTabScrollButtons,120);} 
 document.addEventListener('submit',e=>{const button=e.submitter||e.target.querySelector('button[type=submit],button:not([type])');if(!button)return;saveFeedbackButton=button;if(!button.dataset.saveOriginal)button.dataset.saveOriginal=button.textContent.trim()||'שמירה';button.textContent='שומרת…';button.disabled=true;setTimeout(()=>{if(saveFeedbackButton===button){button.disabled=false;button.textContent=button.dataset.saveOriginal;saveFeedbackButton=null}},5000)},true);
-document.getElementById('modalClose').onclick=close;document.getElementById('modal').onclick=e=>{if(e.target.id==='modal')close()};document.getElementById('backupBtn').onclick=exportData;document.getElementById('cloudBtn').onclick=()=>go('settings');
+document.getElementById('modalClose').onclick=()=>close();
+const modalRoot=document.getElementById('modal'),modalBody=document.getElementById('modalBody');
+modalRoot.addEventListener('pointerdown',modalPointerStart,true);
+modalRoot.addEventListener('pointermove',modalPointerMove,true);
+modalRoot.addEventListener('pointerup',modalPointerEnd,true);
+modalRoot.addEventListener('pointercancel',()=>{modalPointerDown=null;modalPointerMoved=false},true);
+modalRoot.addEventListener('click',modalBackdropClick);
+modalBody.addEventListener('input',markModalDirty,true);
+modalBody.addEventListener('change',markModalDirty,true);
+modalBody.addEventListener('click',e=>{if(e.target.closest('button')&&!e.target.closest('button[type=submit]')&&!e.target.closest('[data-no-dirty]')){const b=e.target.closest('button');if(!/ביטול|סגירה|חזרה/.test(b.textContent||''))setTimeout(markModalDirty,0)}},true);
+document.getElementById('backupBtn').onclick=exportData;document.getElementById('cloudBtn').onclick=()=>go('settings');
 document.getElementById('importFile').onchange=e=>{if(e.target.files[0])importData(e.target.files[0]);e.target.value=''};document.getElementById('ramiImportFile').onchange=e=>{if(e.target.files[0])importRamiFile(e.target.files[0]);e.target.value=''};
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&cloud.user)pullCloud(false)});window.addEventListener('focus',()=>{if(cloud.user)pullCloud(false)});window.addEventListener('online',()=>{if(cloud.user)pullCloud(false)});
 function showAppUpdate(registration){
@@ -1563,7 +1604,7 @@ function initServiceWorkerUpdates(){
   };
   window.addEventListener('load',async()=>{
     try{
-      const registration=await navigator.serviceWorker.register('./sw.js?v=1200',{updateViaCache:'none'});
+      const registration=await navigator.serviceWorker.register('./sw.js?v=1210',{updateViaCache:'none'});
       inspect(registration);
       await registration.update();
       const check=()=>registrationRef?.update().catch(()=>{});
