@@ -86,6 +86,8 @@ function migrateRecipe(raw){
   r.categoryManual=!!r.categoryManual;
   r.category=effectiveRecipeCategory(r);
   r.salesUnit=SALES_UNITS.includes(r.salesUnit)?r.salesUnit:'שקיות';
+  const inferredCategory=recipeCategoryFromText(`${r.name||''} ${r.category||''}`);
+  if(r.salesUnit==='שקיות'&&['עוגות','עוגות שמרים'].includes(inferredCategory))r.salesUnit='יחידות';
   r.packageWeight=Math.max(1,Math.round(Number(r.packageWeight||r.unitWeight||200)));
   r.yieldUnits=Math.max(0,Math.round(Number(r.yieldUnits||0)));
   r.evaporationPct=Number(r.evaporationPct??12);
@@ -277,6 +279,12 @@ function inventoryLinkedPrice(i){
 function inventoryAmountPerPackage(i){const linked=inventoryLinkedPrice(i);if(linked){const c=canonicalAmount(linked.ingredient,linked.packQty,linked.unit);return c.unit==='גרם'?Math.max(0,c.qty):Math.max(0,Number(linked.packQty||0))}const c=canonicalAmount(i?.name,Number(i?.amountPerPackage??i?.qty??0),i?.unit||'גרם');return c.unit==='גרם'?Math.max(0,c.qty):Math.max(0,Number(i?.amountPerPackage??i?.qty??0))}
 function inventoryUnit(i){return 'גרם'}
 function inventorySupplier(i){const linked=inventoryLinkedPrice(i);return linked?state.suppliers.find(s=>s.id===linked.supplierId)||null:null}
+function ingredientPurchaseSpec(name,qty=1,unit='יחידה'){
+  const n=cleanIngredientName(name),u=normalizedRecipeUnit(unit);
+  // חלמון וחלבון נקנים כביצים. לצורך עלות/מלאי כל אחד מוערך כחצי ביצה.
+  if(u==='יחידה'&&/^חלמונ|^חלבונ/.test(n))return{name:'ביצה',qty:Number(qty||0)*0.5,unit:'יחידה',sourceName:name,derived:true};
+  return{name,qty:Number(qty||0),unit:u,sourceName:name,derived:false};
+}
 function inventoryTotal(i){
   if(Number.isFinite(Number(i?.stockQty)))return Math.max(0,Number(i.stockQty));
   return Math.max(0,Number(i?.packageCount||0))*inventoryAmountPerPackage(i);
@@ -286,8 +294,8 @@ function invAmount(name,unit){
   state.inventory.forEach(i=>{if(!ingredientNamesEquivalent(i.name,name))return;const x=canonicalAmount(i.name,inventoryTotal(i),inventoryUnit(i));if(x.unit===requested.unit)total+=x.qty/requested.qty});return total;
 }
 function unitCost(name,unit){
-  const requested=canonicalAmount(name,1,unit);let best=null;
-  supplierPriceMatches(name).forEach(p=>{const pack=canonicalAmount(p.ingredient,p.packQty,p.unit);if(pack.unit!==requested.unit||!pack.qty)return;const cost=Number(p.packPrice||0)/pack.qty*requested.qty;if(best===null||cost<best)best=cost});
+  const spec=ingredientPurchaseSpec(name,1,unit),requested=canonicalAmount(spec.name,spec.qty,spec.unit);let best=null;
+  supplierPriceMatches(spec.name).forEach(p=>{const pack=canonicalAmount(p.ingredient,p.packQty,p.unit);if(pack.unit!==requested.unit||!pack.qty)return;const cost=Number(p.packPrice||0)/pack.qty*requested.qty;if(best===null||cost<best)best=cost});
   return best||0;
 }
 function expandedIngredients(r){
@@ -311,15 +319,15 @@ function demand(){
   const byRecipe={},ingredients={};
   activeOrders().forEach(o=>(o.items||[]).forEach(i=>byRecipe[i.recipeId]=(byRecipe[i.recipeId]||0)+Number(i.qty||0)));
   activeSalesEvents().forEach(event=>(event.items||[]).forEach(item=>{if(item.recipeId)byRecipe[item.recipeId]=(byRecipe[item.recipeId]||0)+Number(item.targetQty||0)}));
-  Object.entries(byRecipe).forEach(([rid,units])=>{const r=recipe(rid);if(!r)return;const recipeRuns=Math.ceil(units/Math.max(1,recipeYieldUnits(r)));expandedIngredients(r).forEach(i=>{const x=canonicalAmount(i.name,Number(i.qty||0)*recipeRuns,i.unit),key=`${cleanIngredientName(i.name)}|${x.unit}`;if(!ingredients[key])ingredients[key]={name:i.name,unit:x.unit,required:0,category:i.category||'אחר'};ingredients[key].required+=x.qty})});
+  Object.entries(byRecipe).forEach(([rid,units])=>{const r=recipe(rid);if(!r)return;const recipeRuns=Math.ceil(units/Math.max(1,recipeYieldUnits(r)));expandedIngredients(r).forEach(i=>{if(i.asNeeded)return;const spec=ingredientPurchaseSpec(i.name,Number(i.qty||0)*recipeRuns,i.unit),x=canonicalAmount(spec.name,spec.qty,spec.unit),key=`${cleanIngredientName(spec.name)}|${x.unit}`;if(!ingredients[key])ingredients[key]={name:spec.name,unit:x.unit,required:0,category:ingredientCategory(spec.name),derivedFrom:spec.derived?[i.name]:[]};ingredients[key].required+=x.qty;if(spec.derived&&!ingredients[key].derivedFrom.includes(i.name))ingredients[key].derivedFrom.push(i.name)})});
   return{byRecipe,ingredients};
 }
 function shopping(){return Object.entries(demand().ingredients).filter(([,x])=>!isWaterIngredient(x.name)).map(([key,x])=>{const available=invAmount(x.name,x.unit);return{...x,key,available,need:Math.max(0,x.required-available),checked:!!state.checkedShopping[key]}}).filter(x=>x.need>0).sort((a,b)=>a.category.localeCompare(b.category,'he')||a.name.localeCompare(b.name,'he'))}
 function supplierOptions(){const items=shopping();return state.suppliers.map(s=>{let itemsCost=0,covered=0;items.forEach(it=>{let best=null;(s.prices||[]).filter(p=>ingredientNamesEquivalent(p.ingredient,it.name)).forEach(p=>{const x=canonicalAmount(p.ingredient,p.packQty,p.unit);if(x.unit!==it.unit||!x.qty)return;const packs=Math.ceil(it.need/x.qty),cost=packs*Number(p.packPrice||0);if(best===null||cost<best)best=cost});if(best!==null){itemsCost+=best;covered++}});const delivery=Number(s.deliveryCost||0),distanceCost=Number(s.distanceKm||0)*2*Number(state.settings.distanceCostPerKm||0);return{supplier:s,itemsCost,covered,delivery,distanceCost,total:itemsCost+delivery+distanceCost}}).sort((a,b)=>a.total-b.total)}
 
 function bestPriceDetail(name,unit){
-  const requested=canonicalAmount(name,1,unit);let best=null;
-  supplierPriceMatches(name).forEach(p=>{const pack=canonicalAmount(p.ingredient,p.packQty,p.unit);if(pack.unit!==requested.unit||!pack.qty)return;const cost=Number(p.packPrice||0)/pack.qty*requested.qty;if(!best||cost<best.unitCost)best={...p,unitCost:cost}});return best;
+  const spec=ingredientPurchaseSpec(name,1,unit),requested=canonicalAmount(spec.name,spec.qty,spec.unit);let best=null;
+  supplierPriceMatches(spec.name).forEach(p=>{const pack=canonicalAmount(p.ingredient,p.packQty,p.unit);if(pack.unit!==requested.unit||!pack.qty)return;const cost=Number(p.packPrice||0)/pack.qty*requested.qty;if(!best||cost<best.unitCost)best={...p,unitCost:cost,purchaseIngredient:spec.name,derived:spec.derived}});return best;
 }
 function recipeCostBreakdown(recipeId){
   const r=recipe(recipeId);if(!r)return;const c=recipeCost(r),unit=salesUnitLabel(r),rows=expandedIngredients(r).map(i=>{const detail=bestPriceDetail(i.name,i.unit),cost=Number(i.qty||0)*(detail?.unitCost||0);return{...i,detail,cost}});
@@ -327,25 +335,32 @@ function recipeCostBreakdown(recipeId){
   modal(`פירוט עלות — ${r.name}`,`<div class="cost-breakdown-head"><div><span>עלות חומרי גלם למתכון</span><strong>${money(c.total)}</strong></div><div><span>תפוקה</span><strong>${yieldCount?`${yieldCount} ${esc(unit)}`:'לא הוגדר'}</strong></div><div><span>עלות ל${esc(salesUnitSingular(unit))}</span><strong>${perUnitText}</strong></div></div><div class="notice">החישוב כולל חומרי גלם ופחת בלבד. שכר עבודה ועלות אריזה אינם נכללים.</div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>רכיב</th><th>כמות</th><th>מחיר שנמצא</th><th>עלות במתכון</th></tr></thead><tbody>${rows.map(i=>`<tr><td><strong>${esc(i.name)}</strong>${i.sourceSubRecipe?`<div class="meta">מתוך ${esc(i.sourceSubRecipe)}</div>`:''}</td><td>${fmtQty(i.qty,i.unit)} ${esc(normalizedRecipeUnit(i.unit))}</td><td>${i.detail?`${esc(i.detail.supplierName)} · ${money(i.detail.packPrice)} / ${fmtQty(i.detail.packQty,i.detail.unit)} ${esc(normalizedRecipeUnit(i.detail.unit))}`:'<span class="muted">אין מחיר תואם</span>'}</td><td class="money">${money(i.cost)}</td></tr>`).join('')}</tbody></table></div>`)
 }
 
-/* ניתוח מתכונים מקומי */
+/* ניתוח מתכונים מקומי — v11.9: ניקוי, נרמול והבנת מבנה גמישה */
 const FRACTION_VALUES={'½':.5,'¼':.25,'¾':.75,'⅓':1/3,'⅔':2/3,'⅛':.125,'⅜':.375,'⅝':.625,'⅞':.875,'חצי':.5,'רבע':.25,'שליש':1/3};
+const HEB_NUMBER_VALUES={'אחד':1,'אחת':1,'שני':2,'שתי':2,'שניים':2,'שתיים':2,'שלושה':3,'שלוש':3,'ארבעה':4,'ארבע':4,'חמישה':5,'חמש':5,'שישה':6,'שש':6,'שבעה':7,'שבע':7,'שמונה':8,'תשעה':9,'תשע':9,'עשרה':10,'עשר':10};
 const UNIT_ALIASES=[
 {re:/^(?:ק[״"]?ג|קילו(?:גרם)?|קילוגרם|קילוגרמים)(?=\s|$)/i,unit:'ק"ג'},
 {re:/^(?:גרם|גרמים|גר׳|ג׳|ג')(?=\s|$)/i,unit:'גרם'},
 {re:/^(?:מ[״"]?ל|מיליליטר(?:ים)?|ml)(?=\s|$)/i,unit:'מ"ל'},
 {re:/^(?:ליטר|ליטרים)(?=\s|$)/i,unit:'ליטר'},
-{re:/^(?:כוס|כוסות)(?=\s|$)/i,unit:'כוס'},
+{re:/^(?:כפית|כפיות|כפ׳)(?=\s|$)/i,unit:'כפית'},
 {re:/^(?:כף|כפות)(?=\s|$)/i,unit:'כף'},
-{re:/^(?:כפית|כפיות)(?=\s|$)/i,unit:'כפית'},
+{re:/^(?:כוס|כוסות)(?=\s|$)/i,unit:'כוס'},
 {re:/^(?:קורט|קורטים)(?=\s|$)/i,unit:'קורט'},
-{re:/^(?:חבילה|חבילות|מארז|מארזים|שקית|שקיות)(?=\s|$)/i,unit:'חבילה'},
+{re:/^(?:חבילה|חבילות|מארז|מארזים|שקית|שקיות|מיכל|מיכלים|פחית|פחיות)(?=\s|$)/i,unit:'חבילה'},
 {re:/^(?:יחידה|יחידות)(?=\s|$)/i,unit:'יחידה'}
 ];
-function parseNumberToken(token){token=String(token||'').trim().replace(',','.');if(FRACTION_VALUES[token]!==undefined)return FRACTION_VALUES[token];if(/^\d+\/\d+$/.test(token)){const[a,b]=token.split('/').map(Number);return b?a/b:0}if(/^\d+\s+\d+\/\d+$/.test(token)){const[m,f]=token.split(/\s+/,2);return Number(m)+parseNumberToken(f)}const n=Number(token);return Number.isFinite(n)?n:0}
-function ingredientCategory(name){const n=cleanIngredientName(name);if(/חלב|חמאה|שמנת|יוגורט|גבינ|ביצה|ביצים/.test(n))return'מקרר';if(/קפוא|גלידה/.test(n))return'קפואים';if(/קופס|שקית|נייר אפייה|אריז|מדבקה|סרט/.test(n))return'אריזות';if(/שוקולד|אגוז|שקד|פקאן|פיסטוק|צימוק|סוכריות|תמצית|וניל|מחית|ריבה|ממרח|טופי/.test(n))return'תוספות';if(/קמח|סוכר|קקאו|מלח|אבקת אפייה|סודה|שמרים|קורנפלור|שיבולת|קוואקר/.test(n))return'יבשים';return'אחר'}
+function parseNumberToken(token){
+  token=String(token||'').trim().replace(',','.');
+  if(FRACTION_VALUES[token]!==undefined)return FRACTION_VALUES[token];
+  if(HEB_NUMBER_VALUES[token]!==undefined)return HEB_NUMBER_VALUES[token];
+  if(/^\d+\/\d+$/.test(token)){const[a,b]=token.split('/').map(Number);return b?a/b:0}
+  if(/^\d+\s+\d+\/\d+$/.test(token)){const parts=token.split(/\s+/);return Number(parts[0])+parseNumberToken(parts[1])}
+  const n=Number(token);return Number.isFinite(n)?n:0;
+}
+function ingredientCategory(name){const n=cleanIngredientName(name);if(/עוגת?\s*שמרים.*מוכנ/.test(n))return'אחר';if(/חלב|חמאה|שמנת|יוגורט|גבינ|ביצה|ביצים|חלמון|חלבון/.test(n))return'מקרר';if(/קפוא|גלידה/.test(n))return'קפואים';if(/קופס|שקית|נייר אפייה|אריז|מדבקה|סרט/.test(n))return'אריזות';if(/שוקולד|אגוז|שקד|פקאן|פיסטוק|צימוק|סוכריות|תמצית|וניל|מחית|ריבה|ממרח|טופי/.test(n))return'תוספות';if(/קמח|סוכר|קקאו|מלח|אבקת אפייה|סודה|שמרים|קורנפלור|שיבולת|קוואקר/.test(n))return'יבשים';return'אחר'}
 function recipeCategoryFromText(text){
   const n=cleanIngredientName(text);
-  // סדר הבדיקות חשוב: קטגוריות ספציפיות לפני כלליות.
   if(/עוגת?\s*שמרים|בבקה|קראנץ/.test(n))return'עוגות שמרים';
   if(/חלה|חלות|לחם|לחמנ|בריוש/.test(n))return'חלות ולחמים';
   if(/עוגי|קוקי|קנטוצ|ביסקוט|סבלה|שורטברד|מקרון/.test(n))return'עוגיות';
@@ -362,19 +377,43 @@ function recipeCategoryOptions(selected=''){const values=[...PRODUCT_CATEGORIES]
 function autoSuggestRecipeCategory(){const form=document.getElementById('recipeForm'),select=form?.elements.category,name=form?.elements.name;if(!form||!select||!name||select.dataset.manual==='true')return;const ingredients=readRecipeFormIngredients().map(i=>i.name).join(' '),suggested=recipeCategoryFromText(`${name.value} ${ingredients}`);if(suggested&&suggested!=='אחר')select.value=suggested}
 function markRecipeCategoryManual(select){if(select)select.dataset.manual='true'}
 function stripIngredientComment(text){
-  return String(text||'').replace(/\s*[–—-]\s*(?:מעניק|מומלץ|לאיזון|לפי|לטעם|אופציונלי|רשות).*/i,'').replace(/\((?:מומלץ|לאיזון|אופציונלי|לפי הטעם|בסוף|בהתחלה)[^)]*\)/gi,'').trim();
+  return String(text||'').replace(/\s*[–—-]\s*(?:מעניק|מומלץ|לאיזון|לטעם|אופציונלי|רשות).*/i,'').replace(/\((?:מומלץ|לאיזון|אופציונלי|לפי הטעם|בסוף|בהתחלה)[^)]*\)/gi,'').trim();
 }
 function normalizeIngredientName(text){
-  return stripIngredientComment(String(text||'').replace(/^של\s+/,'').replace(/[,:;.-]+$/,'').trim());
+  return stripIngredientComment(String(text||'').replace(/^של\s+/,'').replace(/\s+/g,' ').replace(/[,:;.-]+$/,'').trim());
+}
+function cleanRecipePaste(text){
+  let s=String(text||'').replace(/\r/g,'\n').replace(/\u00a0/g,' ');
+  // Markdown links: keep the visible label, discard the URL/title.
+  s=s.replace(/\[([^\]]+)\]\((?:[^()]|\([^)]*\))*\)/g,'$1');
+  s=s.replace(/https?:\/\/\S+/gi,' ');
+  s=s.replace(/<[^>]*>/g,' ');
+  s=s.replace(/!\[[^\]]*\]\([^)]*\)/g,' ');
+  s=s.replace(/[*_~`]+/g,'');
+  s=s.replace(/^\s*#{1,6}\s*/gm,'');
+  s=s.replace(/^\s*>\s?/gm,'');
+  // Common copied-site noise.
+  s=s.replace(/^.*(?:המרת מידות ומשקלות|לכל המתכונים עם|למתכונים נוספים|פרסומת|בשיתוף|תוכן ממומן).*$/gmi,'');
+  // Put spaces between attached numbers/fractions and Hebrew/Latin words.
+  s=s.replace(/(\d|[½¼¾⅓⅔⅛⅜⅝⅞])(?=[\u0590-\u05FFA-Za-z])/g,'$1 ');
+  s=s.replace(/([\u0590-\u05FFA-Za-z])(?=\d+(?:[.,]\d+)?\s*(?:גרם|קג|ק"ג|מ"ל|מל|ליטר|כפית|כף|כוס)\b)/g,'$1 ');
+  s=s.replace(/[‐‑‒–—]/g,'-');
+  // Split numbered method steps that were pasted in one paragraph.
+  s=s.replace(/[ \t]+(?=\d{1,2}[.)]\s+)/g,'\n');
+  s=s.replace(/[ \t]+[•▪◦]\s*/g,'\n• ');
+  s=s.replace(/\n{3,}/g,'\n\n');
+  return s.split('\n').map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean).join('\n');
 }
 function parseQuantityAndUnit(text){
   let s=String(text||'').trim();
-  const amount=s.match(/^(\d+\s+\d+\/\d+|\d+\/\d+|\d+(?:[.,]\d+)?|[½¼¾⅓⅔⅛⅜⅝⅞]|חצי|רבע|שליש)\s*(.*)$/i);
+  const wordNums=Object.keys(HEB_NUMBER_VALUES).join('|');
+  const amount=s.match(new RegExp(`^(\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d+(?:[.,]\\d+)?|[½¼¾⅓⅔⅛⅜⅝⅞]|חצי|רבע|שליש|${wordNums})\\s*(.*)$`,'i'));
   if(!amount)return null;
   let qty=parseNumberToken(amount[1]),rest=amount[2].trim();
   if(!qty)return null;
   let unit='יחידה';
   for(const a of UNIT_ALIASES){const m=rest.match(a.re);if(m){unit=a.unit;rest=rest.slice(m[0].length).trim();break}}
+  if(/^ו?חצי(?:\s|$)/.test(rest)){qty+=.5;rest=rest.replace(/^ו?חצי\s*/,'')}
   const explicit=rest.match(/\((?:כ\s*[-־]?\s*)?(\d+(?:[.,]\d+)?)\s*(גרם|גרמים|ק[״"]?ג|מ[״"]?ל|מיליליטר(?:ים)?|ליטר|ליטרים|ml)\)/i);
   if(explicit){
     qty=Number(explicit[1].replace(',','.'));
@@ -387,213 +426,161 @@ function parseQuantityAndUnit(text){
 }
 function parseIngredientLine(line){
   let s=String(line||'').trim().replace(/^[•*\-–—]+\s*/,'').replace(/\s+/g,' ');if(!s)return null;
-  // שורות ממוספרות הן הוראות הכנה, לא כמויות של מצרכים.
-  if(/^\d+[.)]\s+/.test(s)||/^שלב\s*\d+/i.test(s))return null;
+  if(/^\d+[.)]\s+/.test(s)||/^שלב\s*\d+\b/i.test(s))return null;
+  if(/^(?:או|או לחלופין|לחלופין)\b/i.test(s))return null;
+  const asNeeded=s.match(/^(.+?)\s+(?:לפי הצורך|לפי הטעם|לשימון|לקימוח|לפיזור|להברשה)\s*$/i);
+  if(asNeeded&&!/\d/.test(asNeeded[1])){const name=normalizeIngredientName(asNeeded[1]);return name?{name,qty:0,unit:'יחידה',category:ingredientCategory(name),asNeeded:true}:null}
   if(/^קורט\s+/.test(s)){
     const name=normalizeIngredientName(s.replace(/^קורט\s+/,''));
     return name?{name,qty:1,unit:'קורט',category:ingredientCategory(name)}:null;
   }
-  // במתכונים נפוץ לכתוב "כפית וניל" או "כף קקאו" בלי הספרה 1.
-  if(/^(?:כפית|כף|כוס|חבילה|יחידה)\s+/i.test(s)){
+  // "כף וחצי קמח", "כפית וניל" without an explicit leading 1.
+  let m=s.match(/^(כפית|כף|כוס)\s+וחצי\s+(.+)$/i);
+  if(m){const unit=m[1],name=normalizeIngredientName(m[2]);return name?{name,qty:1.5,unit,category:ingredientCategory(name)}:null}
+  if(/^(?:כפית|כף|כוס|חבילה|יחידה|מיכל|מקל|פחית)\s+/i.test(s)){
     const parsed=parseQuantityAndUnit(`1 ${s}`);
-    if(parsed){const name=normalizeIngredientName(parsed.rest);return name?{name,qty:1,unit:parsed.unit,category:ingredientCategory(name)}:null}
+    if(parsed){const name=normalizeIngredientName(parsed.rest);return name?{name,qty:parsed.qty,unit:parsed.unit,category:ingredientCategory(name)}:null}
   }
-  // תומך גם במבנה "שם רכיב: 220 גרם" וגם במבנה "220 גרם רכיב".
-  const named=s.match(/^([^:]{2,80})\s*:\s*(.+)$/);
-  if(named){
-    const parsed=parseQuantityAndUnit(named[2]);
-    if(parsed){
-      let name=normalizeIngredientName(named[1]);
-      if(/^ביצה$/i.test(name)&&/גדולה|\bL\b/i.test(parsed.rest))name='ביצה גדולה L';
-      return name?{name,qty:parsed.qty,unit:parsed.unit,category:ingredientCategory(name)}:null;
-    }
+  // "name: 220 g"
+  m=s.match(/^([^:]{2,100})\s*:\s*(.+)$/);
+  if(m){
+    const parsed=parseQuantityAndUnit(m[2]);
+    if(parsed){let name=normalizeIngredientName(m[1]);if(name)return{name,qty:parsed.qty,unit:parsed.unit,category:ingredientCategory(name)}}
   }
-  const parsed=parseQuantityAndUnit(s);if(!parsed)return null;
-  let rest=normalizeIngredientName(parsed.rest);
-  if(/^ביצ(?:ה|ים)\b/.test(rest)){parsed.unit='יחידה';rest=rest.replace(/^ביצ(?:ה|ים)\b/,'ביצה')}
-  if(!rest)return null;
-  return{name:rest,qty:parsed.qty,unit:parsed.unit,category:ingredientCategory(rest)};
+  // Normal order: "220 g butter".
+  let parsed=parseQuantityAndUnit(s);
+  if(parsed){
+    let rest=normalizeIngredientName(parsed.rest);
+    if(/^ביצ(?:ה|ים)\b/.test(rest)){parsed.unit='יחידה';rest=rest.replace(/^ביצ(?:ה|ים)\b/,'ביצה')}
+    if(/^חלמונ(?:ים)?(?=\s|$)/.test(rest)){parsed.unit='יחידה';rest=rest.replace(/^חלמונ(?:ים)?(?=\s|$)/,'חלמון')}
+    if(/^חלבונ(?:ים)?(?=\s|$)/.test(rest)){parsed.unit='יחידה';rest=rest.replace(/^חלבונ(?:ים)?(?=\s|$)/,'חלבון')}
+    if(rest)return{name:rest,qty:parsed.qty,unit:parsed.unit,category:ingredientCategory(rest)};
+  }
+  // Reverse order: "butter 200 g", "eggs 2".
+  const unitWords='(?:גרם|גרמים|ג[׳\\\']?|ק[״"]?ג|קג|מ[״"]?ל|מל|ליטר|ליטרים|כפית|כפיות|כף|כפות|כוס|כוסות|יחידה|יחידות|חבילה|חבילות)';
+  m=s.match(new RegExp(`^(.+?)\\s+(\\d+(?:[.,]\\d+)?|\\d+\\/\\d+|[½¼¾⅓⅔⅛⅜⅝⅞])\\s*(${unitWords})\\s*$`,'i'));
+  if(m){
+    const candidate=`${m[2]} ${m[3]} ${m[1]}`,x=parseQuantityAndUnit(candidate);
+    if(x){const name=normalizeIngredientName(x.rest);if(name)return{name,qty:x.qty,unit:x.unit,category:ingredientCategory(name)}}
+  }
+  return null;
 }
 function inferAllergens(ingredients){const text=cleanIngredientName((ingredients||[]).map(i=>i.name).join(' ')),a=[];if(/קמח|גלוטן|חיטה|שיבולת|שיפון|שעורה/.test(text))a.push('גלוטן');if(/חלב|חמאה|שמנת|יוגורט|גבינ/.test(text))a.push('חלב');if(/ביצה|ביצים|חלבון|חלמון/.test(text))a.push('ביצים');if(/אגוז|שקד|פקאן|פיסטוק|לוז|קשיו/.test(text))a.push('אגוזים');if(/בוטנ/.test(text))a.push('בוטנים');if(/שומשום|טחינה/.test(text))a.push('שומשום');if(/סויה/.test(text))a.push('סויה');return a.join(', ')}
-function normalizeSectionName(text){
-  return String(text||'').replace(/[📦✨]/g,'').replace(/[:\-–—]+$/,'').replace(/^(?:ל|עבור)\s+/,'').replace(/^ה(?=עוגיות|טופי|בצק|קרם|מילוי)/,'').trim();
-}
-function isGenericHeading(line){return/^(?:מצרכים|רכיבים|אופן הכנה|אופן ההכנה|הוראות|הכנה|שלבי הכנה|אפייה|הערות|טיפים|אחסון|אחסון וחיי מדף|ingredients|method|instructions)\s*:?$/i.test(String(line||'').replace(/[📦✨]/g,'').trim())}
-function isActionLine(line){return/(?:מערבב|ממיס|מוסיפ|מקפל|אופ|מחממ|מקרר|מצננ|מעביר|שופכ|מכניס|מוציא|מקציפ|חותכ|שובר|מבשל|מרדד|יוצר|מסדר|מניח|מוציאים|מחלק|מגלגל|משטח|מרפד|מכין|טורף|מוזג|מפסיק|מניחים|שמים|מבשלים)/.test(cleanIngredientName(line))}
-function isNoteLine(line){return/(?:טיפ|הערה|אחסון|נשמר|חיי מדף|תנאי אחסון|חשוב|שימו לב|אפשר לשמור|חובה לאחסן|עד \d+ (?:ימים|חודשים))/.test(cleanIngredientName(line))}
-function ingredientNamesMatch(a,b){
-  const x=cleanIngredientName(a).replace(/\b(?:איכותית|רכה|כהה|דביק|גדולה|קטנה|שבבים|חתיכות)\b/g,'').trim();
-  const y=cleanIngredientName(b).replace(/\b(?:מתכון|תת מתכון|שלב)\b/g,'').trim();
-  return !!x&&!!y&&(x===y||x.includes(y)||y.includes(x));
-}
+function normalizeSectionName(text){return String(text||'').replace(/[📦✨]/g,'').replace(/[:\-–—]+$/,'').replace(/^(?:ל|עבור)\s+/,'').replace(/^ה(?=עוגיות|טופי|בצק|קרם|מילוי)/,'').trim()}
+function isGenericHeading(line){return/^(?:מצרכים|רכיבים|חומרים|מה צריך|מה צריכים|אופן הכנה|אופן ההכנה|הוראות|הכנה|שלבי הכנה|איך מכינים|אפייה|הערות|טיפים|אחסון|אחסון וחיי מדף|ingredients|method|instructions)\s*:?$/i.test(String(line||'').replace(/[📦✨]/g,'').trim())}
+function isActionLine(line){return/(?:מערבב|ממיס|מוסיפ|מקפל|אופ|מחממ|מקרר|מצננ|מעביר|שופכ|מכניס|מוציא|מקציפ|חותכ|שובר|מבשל|מרדד|יוצר|מסדר|מניח|מחלק|מגלגל|משטח|מרפד|מכין|טורף|מוזג|מפסיק|שמים|פורס|מסננ|לוחצ|נותנ|ממלא|מחזיר|מגיש|מערבבים|מרתיח|משמנים)/.test(cleanIngredientName(line))}
+function isNoteLine(line){return/(?:טיפ|הערה|אחסון|נשמר|חיי מדף|תנאי אחסון|חשוב|שימו לב|אפשר לשמור|חובה לאחסן|הערת המערכת|עד \d+ (?:ימים|חודשים))/.test(cleanIngredientName(line))}
+function ingredientNamesMatch(a,b){const x=cleanIngredientName(a).replace(/\b(?:איכותית|רכה|כהה|דביק|גדולה|קטנה|שבבים|חתיכות)\b/g,'').trim(),y=cleanIngredientName(b).replace(/\b(?:מתכון|תת מתכון|שלב)\b/g,'').trim();return !!x&&!!y&&(x===y||x.includes(y)||y.includes(x))}
 function isMainIngredientSubsectionHeading(line){
   const t=cleanIngredientName(normalizeSectionName(line));
-  return /^(?:חומרים\s+)?(?:ל)?(?:בצק|קיפול|הברשה|ציפוי|קישוט|פיזור|הגשה|אפייה|תבנית|שימון|סיום|גימור)(?:\s+.*)?$/.test(t)
-    || /^(?:לקיפול|להברשה|לציפוי|לקישוט|לפיזור|להגשה|לפני אפייה|לאחר אפייה|אחרי אפייה)$/.test(t);
+  return /^(?:חומרים\s+)?(?:ל)?(?:בצק|קיפול|הברשה|ציפוי|קישוט|פיזור|הגשה|אפייה|תבנית|שימון|סיום|גימור)(?:\s+.*)?$/.test(t)||/^(?:לקיפול|להברשה|לציפוי|לקישוט|לפיזור|להגשה|לפני אפייה|לאחר אפייה|אחרי אפייה)$/.test(t);
 }
 function isSubRecipeHeading(line){
-  const t=cleanIngredientName(normalizeSectionName(line));
-  if(!t||isMainIngredientSubsectionHeading(t))return false;
-  return /(?:^|\s)(?:מילוי|קרם|גנאש|פרלינה|טופי|רוטב|סירופ|ריבה|קראמבל|סטרויזל|קונפי|פטיסייר|מרנג)(?:\s|$)/.test(t);
+  const t=cleanIngredientName(normalizeSectionName(line));if(!t||isMainIngredientSubsectionHeading(t))return false;
+  return /(?:^|\s)(?:מילוי|קרם|גנאש|פרלינה|טופי|רוטב|סירופ|ריבה|קראמבל|סטרויזל|קונפי|פטיסייר|מרנג|בלילה)(?:\s|$)/.test(t);
 }
-function isMainMethodHeading(line){
-  const t=cleanIngredientName(normalizeSectionName(line));
-  return /^(?:הרכבה|עיצוב|עיצוב והרכבה|הרכבה ואפייה|התפחה|התפחה ואפייה|אפייה|סיום|גימור|אופן ההכנה|אופן הכנה|הכנה|שלבי הכנה)$/.test(t);
-}
+function isMainMethodHeading(line){const t=cleanIngredientName(normalizeSectionName(line));return /^(?:הרכבה|עיצוב|עיצוב והרכבה|הרכבה ואפייה|התפחה|התפחה ואפייה|אפייה|סיום|גימור|אופן ההכנה|אופן הכנה|הכנה|שלבי הכנה|מגישים)$/.test(t)}
 function extractInlineIngredients(line){
   const text=String(line||'').replace(/([.;])/g,' $1 '),out=[];
-  const unit='(?:גרם|ק[״\"׳\']?ג|מ[״\"׳\']?ל|מיליליטר|ליטר|כפית|כפיות|כף|כפות|כוס|כוסות|יחידה|יחידות)';
+  const unit='(?:גרם|ק[״"׳\']?ג|מ[״"׳\']?ל|מיליליטר|ליטר|כפית|כפיות|כף|כפות|כוס|כוסות|יחידה|יחידות|מיכל|מיכלים)';
   const re=new RegExp('(\\d+(?:[.,]\\d+)?|\\d+\\/\\d+)\\s*('+unit+')\\s+(.+?)(?=(?:\\s+ו?\\s*\\d+(?:[.,]\\d+)?\\s*'+unit+')|[.;]|$)','g');
-  let m;
-  while((m=re.exec(text))){
-    const cleanName=String(m[3]||'').replace(/\s+(?:ו?טורפים|ו?מערבבים|ו?ממיסים|ו?מוסיפים)(?:\s+.*)?$/,'').replace(/\s+מהמקרר(?:\s+.*)?$/,'').replace(/\s+ו\s*$/,'').trim();
-    const candidate=`${m[1]} ${m[2]} ${cleanName}`.trim();
-    const parsed=parseIngredientLine(candidate);
-    if(parsed&&parsed.name&&!/^(?:דקות|שעות|מעלות)$/.test(parsed.name))out.push(parsed);
-  }
+  let m;while((m=re.exec(text))){const cleanName=String(m[3]||'').replace(/\s+(?:ו?טורפים|ו?מערבבים|ו?ממיסים|ו?מוסיפים)(?:\s+.*)?$/,'').replace(/\s+מהמקרר(?:\s+.*)?$/,'').replace(/\s+ו\s*$/,'').trim();const parsed=parseIngredientLine(`${m[1]} ${m[2]} ${cleanName}`);if(parsed&&parsed.name&&!/^(?:דקות|שעות|מעלות)$/.test(parsed.name))out.push(parsed)}
   return out;
 }
+function inferStepMeta(text,kindHint=''){
+  const n=cleanIngredientName(text),meta={text:String(text||'').trim(),daysBefore:0,time:'',durationMin:0,passiveMin:0,ovenTemp:0,notes:'',kind:kindHint||'הכנה'};
+  const temp=String(text).match(/(\d{2,3})\s*(?:°|מעלות|c\b)/i);if(temp)meta.ovenTemp=Number(temp[1]);
+  const mins=String(text).match(/(?:כ[- ]?)?(\d+)\s*(?:-|עד|–|—)?\s*(\d+)?\s*(?:דקות|דק['׳]?)/i);
+  const hours=String(text).match(/(?:כ[- ]?)?(\d+(?:[.,]\d+)?)\s*(?:-|עד|–|—)?\s*(\d+(?:[.,]\d+)?)?\s*(?:שעה|שעות)/i);
+  let time=mins?Number(mins[2]||mins[1]):hours?Math.round(Number((hours[2]||hours[1]).replace(',','.'))*60):0;
+  if(/יום לפני|יום קודם/.test(n))meta.daysBefore=1;
+  if(/(?:^|\s)לילה(?:\s|$)|למשך הלילה|overnight/.test(n)){meta.daysBefore=Math.max(meta.daysBefore,1);time=Math.max(time,480)}
+  if(/אופ|תנור/.test(n)){meta.kind='אפייה';meta.passiveMin=time}
+  else if(/התפח/.test(n)){meta.kind='התפחה';meta.passiveMin=time}
+  else if(/מקרר|מצננ|קירור|מקפיא|הקפא/.test(n)){meta.kind='קירור';meta.passiveMin=time}
+  else if(/מניחים.*(?:דקות|שעה)|נותנים לעמוד|מנוחה/.test(n)){meta.kind='מנוחה';meta.passiveMin=time}
+  else if(/מרכיב|הרכבה|ממלא|מגלגל|מעצב/.test(n))meta.kind='הרכבה';
+  else if(time)meta.durationMin=time;
+  return meta;
+}
 function localParseRecipe(text){
-  const raw=String(text||'').replace(/\r/g,'');
-  const prepared=raw.replace(/\s+(?=\d+[.)]\s+)/g,'\n').replace(/\s+[•▪◦]\s*/g,'\n• ');
-  const lines=prepared.split('\n').map(x=>x.trim()).filter(Boolean);
+  const cleaned=cleanRecipePaste(text),raw=cleaned,lines=cleaned.split('\n').map(x=>x.trim()).filter(Boolean);
   let originalTitle='',mode='unknown',current=null,mainSection=null;const sections=[],warnings=[];
   const findSection=name=>sections.find(s=>cleanIngredientName(s.name)===cleanIngredientName(normalizeSectionName(name)));
-  const useSection=(name,role='auto')=>{
-    const clean=normalizeSectionName(name)||originalTitle||'מתכון ראשי';
-    current=findSection(clean)||{id:id('sub'),name:clean,role,ingredients:[],steps:[],bakingSteps:[],notes:[]};
-    if(role!=='auto')current.role=role;
-    if(!sections.includes(current))sections.push(current);
-    if(current.role==='main'&&!mainSection)mainSection=current;
-    return current;
-  };
-  const useMain=()=>{
-    if(mainSection){current=mainSection;return current}
-    mainSection=useSection(originalTitle||'מתכון ראשי','main');
-    return mainSection;
-  };
+  const useSection=(name,role='auto')=>{const clean=normalizeSectionName(name)||originalTitle||'מתכון ראשי';current=findSection(clean)||{id:id('sub'),name:clean,role,ingredients:[],steps:[],bakingSteps:[],notes:[]};if(role!=='auto')current.role=role;if(!sections.includes(current))sections.push(current);if(current.role==='main'&&!mainSection)mainSection=current;return current};
+  const useMain=()=>{if(mainSection){current=mainSection;return current}mainSection=useSection(originalTitle||'מתכון ראשי','main');return mainSection};
+  let lastIngredient=null;
   for(let index=0;index<lines.length;index++){
     const line=lines[index],plain=line.replace(/[📦✨]/g,'').trim(),next=lines[index+1]||'';
-    if(!originalTitle&&index<4&&!parseIngredientLine(line)&&!isGenericHeading(line)&&!isActionLine(line)&&!/(?:רכיבים|מצרכים|חומרים|אופן הכנה)/.test(plain)){
-      originalTitle=normalizeSectionName(line);continue;
+    if(!originalTitle&&index<5&&!parseIngredientLine(line)&&!isGenericHeading(line)&&!isActionLine(line)&&!/(?:רכיבים|מצרכים|חומרים|אופן הכנה)/.test(plain)&&line.length<120){originalTitle=normalizeSectionName(line);continue}
+    // Alternative ingredient line: attach to the previous ingredient instead of counting twice.
+    let alt=plain.match(/^(?:או|או לחלופין|לחלופין)\s+(.+)$/i);
+    if(alt&&lastIngredient){
+      const altIng=parseIngredientLine(alt[1]);
+      lastIngredient.alternatives=[...(lastIngredient.alternatives||[]),altIng||{text:alt[1]}];
+      continue;
     }
-
-    // גם "לקיפול: 250 גרם חמאה" בשורה אחת מזוהה כרכיב של המתכון הראשי.
     let m=plain.match(/^((?:לקיפול|להברשה|לציפוי|לקישוט|לפיזור|להגשה))\s*:\s*(.+)$/i);
-    if(m){useMain();const inline=parseIngredientLine(m[2]);if(inline)current.ingredients.push(inline);mode='ingredients';continue}
-    // תת־מתכון יכול להופיע גם בשורה אחת, למשל "גנאש: 200 גרם שוקולד".
+    if(m){useMain();const inline=parseIngredientLine(m[2]);if(inline){current.ingredients.push(inline);lastIngredient=inline}mode='ingredients';continue}
     m=plain.match(/^(.+?)\s*:\s*(.+)$/i);
-    if(m&&isSubRecipeHeading(m[1])){useSection(m[1],'sub');const inline=parseIngredientLine(m[2]);if(inline)current.ingredients.push(inline);mode='ingredients';continue}
-
-    // "חומרים לבצק" / "מצרכים לבצק" הם חלק מהמתכון הראשי, לא תת־מתכון.
-    m=plain.match(/^(?:מצרכים|רכיבים|חומרים)\s+(?:ל|עבור)?\s*(.+?)\s*:?$/i);
-    if(m){
-      const heading=normalizeSectionName(m[1]);
-      if(isMainIngredientSubsectionHeading(heading)||/^(?:ה)?בצק(?:\s|$)/.test(cleanIngredientName(heading))){useMain();mode='ingredients';continue}
-      if(isSubRecipeHeading(heading)){useSection(heading,'sub');mode='ingredients';continue}
-      useMain();mode='ingredients';continue;
-    }
-    if(/^(?:מצרכים|רכיבים|חומרים|ingredients)\s*:?$/i.test(plain)){useMain();mode='ingredients';continue}
-
+    if(m&&isSubRecipeHeading(m[1])&&parseIngredientLine(m[2])){useSection(m[1],'sub');const inline=parseIngredientLine(m[2]);current.ingredients.push(inline);lastIngredient=inline;mode='ingredients';continue}
+    m=plain.match(/^(?:מצרכים|רכיבים|חומרים|מה צריך|מה צריכים)\s+(?:ל|עבור)?\s*(.+?)\s*:?$/i);
+    if(m){const heading=normalizeSectionName(m[1]);if(isMainIngredientSubsectionHeading(heading)||/^(?:ה)?בצק(?:\s|$)/.test(cleanIngredientName(heading))){useMain()}else if(isSubRecipeHeading(heading)){useSection(heading,'sub')}else useMain();mode='ingredients';continue}
+    if(/^(?:מצרכים|רכיבים|חומרים|מה צריך|מה צריכים|ingredients)\s*:?$/i.test(plain)){useMain();mode='ingredients';continue}
     m=plain.match(/^(.+?)\s+(?:אופן\s+ההכנה|אופן\s+הכנה|הוראות\s+הכנה)\s*:?$/i);
-    if(m){
-      const heading=normalizeSectionName(m[1]);
-      if(isSubRecipeHeading(heading))useSection(heading,'sub');else useMain();
-      mode='steps';continue;
-    }
+    if(m){const heading=normalizeSectionName(m[1]);if(isSubRecipeHeading(heading))useSection(heading,'sub');else useMain();mode='steps';continue}
     m=plain.match(/^(?:אופן\s+הכנת|הוראות\s+הכנת)\s+(.+?)\s*:?$/i)||plain.match(/^אופן\s+ההכנה\s+(?:ל|של)\s*(.+?)\s*:?$/i);
-    if(m){
-      const heading=normalizeSectionName(m[1]);
-      if(isSubRecipeHeading(heading))useSection(heading,'sub');else useMain();
-      mode='steps';continue;
-    }
+    if(m){const heading=normalizeSectionName(m[1]);if(isSubRecipeHeading(heading))useSection(heading,'sub');else useMain();mode='steps';continue}
     if(/^(?:אופן\s+הכנה|אופן\s+ההכנה|הוראות(?:\s+הכנה)?|הכנה|שלבי\s+הכנה|איך\s+מכינים|דרך\s+הכנה|method|instructions)\s*:?$/i.test(plain)){useMain();mode='steps';continue}
     if(/^(?:אפייה|שלב\s+האפייה)\s*:?$/i.test(plain)){useMain();mode='baking';continue}
     if(/^(?:הערות|טיפים|אחסון|אחסון\s+וחיי\s+מדף)\s*:?$/i.test(plain)){if(!current)useMain();mode='notes';continue}
-
-    // כותרות של רכיבי עזר כמו "לקיפול" נשארות בתוך המתכון הראשי.
-    if(isMainIngredientSubsectionHeading(plain)){
-      useMain();
-      mode=/אפייה/.test(cleanIngredientName(plain))?'baking':(/הרכבה|התפחה|עיצוב|סיום|גימור/.test(cleanIngredientName(plain))?'steps':'ingredients');
-      continue;
-    }
-    // כותרת של רכיב מורכב אמיתי יוצרת תת־מתכון גם אם יש שורת הסבר לפני רשימת המצרכים.
-    if(isSubRecipeHeading(plain)&&line.length<70&&!parseIngredientLine(line)){
-      useSection(plain,'sub');mode='ingredients';continue;
-    }
-    // "הרכבה", "התפחה ואפייה" וכד' מחזירות למתכון הראשי.
-    if(isMainMethodHeading(plain)){
-      useMain();mode=/אפייה/.test(cleanIngredientName(plain))?'baking':'steps';continue;
-    }
-
-    // כותרות כגון "שלב 1 – הכנת הבצק" שייכות לאופן ההכנה ואינן יוצרות תת־מתכון.
-    if(/^שלב\s*\d+\s*[:.\-–—]/i.test(plain)||/^שלב\s*\d+\b/i.test(plain)){if(!current)useMain();mode='steps';current.steps.push({text:plain.replace(/[:]+$/,''),daysBefore:0,time:'',durationMin:0});continue}
-
+    if(isMainIngredientSubsectionHeading(plain)){useMain();mode=/אפייה/.test(cleanIngredientName(plain))?'baking':(/הרכבה|התפחה|עיצוב|סיום|גימור/.test(cleanIngredientName(plain))?'steps':'ingredients');continue}
+    if(mode!=='steps'&&mode!=='baking'&&isSubRecipeHeading(plain)&&line.length<70&&!parseIngredientLine(line)){useSection(plain,'sub');mode='ingredients';continue}
+    if(isMainMethodHeading(plain)){useMain();mode=/אפייה/.test(cleanIngredientName(plain))?'baking':'steps';continue}
+    if(/^שלב\s*\d+\s*[:.\-]/i.test(plain)||/^שלב\s*\d+\b/i.test(plain)){if(!current)useMain();mode='steps';current.steps.push(inferStepMeta(plain.replace(/[:]+$/,'')));continue}
     const inlineIngredients=extractInlineIngredients(line);
-    if(inlineIngredients.length>=2){
-      if(!current)useMain();
-      const existing=new Set(current.ingredients.map(i=>`${cleanIngredientName(i.name)}|${i.qty}|${i.unit}`));
-      inlineIngredients.forEach(i=>{const key=`${cleanIngredientName(i.name)}|${i.qty}|${i.unit}`;if(!existing.has(key)){current.ingredients.push(i);existing.add(key)}});
-      const action=line.replace(/^\d+[.)]\s*/,'').replace(/^[•*\-–—]+\s*/,'').trim();
-      if(action&&isActionLine(action))current.steps.push({text:action,daysBefore:0,time:'',durationMin:0});
-      mode='steps';continue;
-    }
+    if(inlineIngredients.length>=2&&mode!=='steps'&&mode!=='baking'){if(!current)useMain();const existing=new Set(current.ingredients.map(i=>`${cleanIngredientName(i.name)}|${i.qty}|${i.unit}`));inlineIngredients.forEach(i=>{const key=`${cleanIngredientName(i.name)}|${i.qty}|${i.unit}`;if(!existing.has(key)){current.ingredients.push(i);lastIngredient=i;existing.add(key)}});mode='ingredients';continue}
     const ing=parseIngredientLine(line),nextIng=parseIngredientLine(next);
     const shortHeading=!ing&&!/^שלב\s*\d+/i.test(plain)&&!isActionLine(line)&&!isNoteLine(line)&&line.length<55&&nextIng&&!/^(?:זמן|תפוקה|טמפרטורה)/.test(line);
-    if(shortHeading){
-      if(isSubRecipeHeading(line)){useSection(line,'sub');mode='ingredients'}
-      else {useMain();mode='ingredients'}
-      continue;
-    }
-    if(ing&&mode==='ingredients'){if(!current)useMain();current.ingredients.push(ing);continue}
-
+    if(shortHeading){if(isSubRecipeHeading(line)){useSection(line,'sub')}else useMain();mode='ingredients';continue}
+    // Ingredients are accepted whenever we have not clearly entered method text yet.
+    if(ing&&mode!=='steps'&&mode!=='baking'&&mode!=='notes'){if(!current)useMain();current.ingredients.push(ing);lastIngredient=ing;mode='ingredients';continue}
     const clean=line.replace(/^\d+[.)]\s*/,'').replace(/^[•*\-–—]+\s*/,'').trim();if(!clean)continue;
     if(/^מומלץ\b/.test(cleanIngredientName(clean))){if(!current)useMain();current.notes.push(clean);continue}
+    const systemNoteAt=clean.search(/הערת המערכת\s*:/i);if(systemNoteAt>0){if(!current)useMain();const before=clean.slice(0,systemNoteAt).trim().replace(/[.;,:-]+$/,'');const note=clean.slice(systemNoteAt).trim();if(before)current.steps.push(inferStepMeta(before));if(note)current.notes.push(note);mode='steps';continue}
     if(current?.role==='sub'&&/(?:לחלק את הבצק|לרדד (?:את )?הבצק|לרדד כל חלק|לעצב (?:את )?הבצק|להתפיח .*?(?:מאפ|בצק)|לאפות .*?(?:מאפ|עוג|בצק))/i.test(cleanIngredientName(clean))){useMain();mode='steps'}
     if(isNoteLine(clean)||mode==='notes'){if(!current)useMain();current.notes.push(clean);mode='notes';continue}
-    if(mode==='baking'){if(!current)useMain();current.bakingSteps.push({text:clean,daysBefore:0,time:'',durationMin:0});continue}
-    if(isActionLine(clean)||mode==='steps'||sections.some(s=>s.ingredients.length)){
-      if(!current)useMain();
-      current.steps.push({text:clean,daysBefore:0,time:'',durationMin:0});mode='steps';continue;
-    }
+    if(mode==='baking'){if(!current)useMain();current.bakingSteps.push(inferStepMeta(clean,'אפייה'));continue}
+    if(isActionLine(clean)||mode==='steps'||sections.some(s=>s.ingredients.length)){if(!current)useMain();current.steps.push(inferStepMeta(clean));mode='steps';continue}
   }
   if(!sections.length)useMain();
   if(!mainSection)mainSection=sections.find(s=>s.role==='main')||sections.find(s=>!isSubRecipeHeading(s.name))||sections[0];
-
-  const ingredientLinks=[];
-  sections.forEach(container=>container.ingredients.forEach(i=>sections.forEach(candidate=>{if(candidate!==container&&candidate.ingredients.length&&candidate.role==='sub'&&ingredientNamesMatch(i.name,candidate.name))ingredientLinks.push({container,ingredient:i,sub:candidate})})));
+  const ingredientLinks=[];sections.forEach(container=>container.ingredients.forEach(i=>sections.forEach(candidate=>{if(candidate!==container&&candidate.ingredients.length&&candidate.role==='sub'&&ingredientNamesMatch(i.name,candidate.name))ingredientLinks.push({container,ingredient:i,sub:candidate})})));
   let main=mainSection||ingredientLinks[0]?.container||sections.slice().sort((a,b)=>b.ingredients.length-a.ingredients.length)[0]||sections[0];
-  const linkedSubs=[...new Set(ingredientLinks.filter(x=>x.container===main).map(x=>x.sub))];
-  const explicitSubs=sections.filter(s=>s!==main&&s.ingredients.length&&s.role==='sub');
-  let subSections=[...new Set([...linkedSubs,...explicitSubs])];
+  const linkedSubs=[...new Set(ingredientLinks.filter(x=>x.container===main).map(x=>x.sub))],explicitSubs=sections.filter(s=>s!==main&&s.ingredients.length&&s.role==='sub');
+  const subSections=[...new Set([...linkedSubs,...explicitSubs])];
   const subRecipes=subSections.map(s=>({...s,usedQtyGrams:0,evaporationPct:0,prepMin:0,restMin:0,bakeMin:0,ovenTemp:0,notes:s.notes.join('\n')}));
   main.ingredients.forEach(i=>{const match=subRecipes.find(s=>ingredientNamesMatch(i.name,s.name));if(match){i.linkedSubRecipeId=match.id;match.usedQtyGrams=ingredientWeightData(i).grams}});
-  subRecipes.forEach(sub=>{
-    const linked=main.ingredients.find(i=>i.linkedSubRecipeId===sub.id||ingredientNamesMatch(i.name,sub.name));
-    if(linked)return;
-    const fullYield=Math.round(calculateSubRecipeWeight(sub).finalWeight||0);
-    if(fullYield>0){
-      sub.usedQtyGrams=fullYield;
-      main.ingredients.push({name:sub.name,qty:fullYield,unit:'גרם',category:'תוספות',linkedSubRecipeId:sub.id});
-      warnings.push(`לא צוינה כמות שימוש עבור ${sub.name}; הנחתי שכל תת־המתכון נכנס למתכון הראשי. אפשר לשנות זאת במסך העריכה.`);
-    }
-  });
-  let finalName=originalTitle||main.name||'מתכון מיובא';
-  const allIngredients=[...main.ingredients,...subRecipes.flatMap(s=>s.ingredients)],allText=cleanIngredientName(allIngredients.map(i=>i.name).join(' ')),stepText=cleanIngredientName([...main.steps,...main.bakingSteps,...subRecipes.flatMap(s=>s.steps),...subRecipes.flatMap(s=>s.bakingSteps||[])].map(s=>s.text).join(' '));
+  subRecipes.forEach(sub=>{const linked=main.ingredients.find(i=>i.linkedSubRecipeId===sub.id||ingredientNamesMatch(i.name,sub.name));if(linked)return;const fullYield=Math.round(calculateSubRecipeWeight(sub).finalWeight||0);if(fullYield>0){sub.usedQtyGrams=fullYield;main.ingredients.push({name:sub.name,qty:fullYield,unit:'גרם',category:'תוספות',linkedSubRecipeId:sub.id});warnings.push(`לא צוינה כמות שימוש עבור ${sub.name}; הנחתי שכל תת-המתכון נכנס למתכון הראשי. אפשר לשנות זאת במסך העריכה.`)}});
+  const inferredTitleStep=[...main.steps,...main.bakingSteps].map(x=>x.text).map(t=>String(t||'').match(/מכינים את ([^:]{2,50})\s*:/i)).filter(Boolean).map(m=>m[1].trim()).find(x=>!/^(?:הבלילה|הבצק|המילוי|הקרם|הגנאש)$/.test(cleanIngredientName(x)));
+  const finalName=originalTitle||inferredTitleStep||main.name||'מתכון מיובא',allIngredients=[...main.ingredients,...subRecipes.flatMap(s=>s.ingredients)],allText=cleanIngredientName(allIngredients.map(i=>i.name).join(' ')),stepText=cleanIngredientName([...main.steps,...main.bakingSteps,...subRecipes.flatMap(s=>s.steps),...subRecipes.flatMap(s=>s.bakingSteps||[])].map(s=>s.text).join(' '));
   if(/שוקולד/.test(stepText)&&!/שוקולד/.test(allText))warnings.push('אופן ההכנה מזכיר שוקולד, אבל שוקולד לא מופיע ברשימת המצרכים. לא הוספתי שוקולד אוטומטית.');
-  const temp=raw.match(/(?:תנור[^\d]{0,18}|)(\d{2,3})\s*(?:°|מעלות)/),bakeRange=raw.match(/אופים?[^\d]{0,20}(\d+)\s*(?:[-–—]\s*(\d+))?\s*(?:דקות|דק['׳]?)/i),bake=raw.match(/(\d+)\s*(?:דקות|דק['׳]?)\s+(?:אפייה|בתנור)/i),prep=raw.match(/זמן\s+הכנה[^\d]{0,10}(\d+)/),yieldM=raw.match(/(?:תפוקה|יוצא|מתקבל(?:ות|ים)?)[^\d]{0,15}(\d+)\s*(?:שקיות|יחידות|עוגיות|מאפים|מנות)?/i);
+  const temp=raw.match(/(?:תנור[^\d]{0,18}|)(\d{2,3})\s*(?:°|מעלות)/),bakeRange=raw.match(/אופים?[^\d]{0,20}(\d+)\s*(?:[-–—]\s*(\d+))?\s*(?:דקות|דק['׳]?)/i),prep=raw.match(/זמן\s+הכנה[^\d]{0,10}(\d+)/);
+  let yieldM=raw.match(/(?:תפוקה|יוצא|מתקבל(?:ות|ים)?)[^\d]{0,15}(\d+)\s*(שקיות|יחידות|עוגיות|עוגות|מאפים|מנות|מגשים|מארזים)?/i);
+  if(!yieldM)yieldM=raw.match(/(?:לכמות של|מספיק ל)[^\d]{0,10}(\d+)\s*(שקיות|יחידות|עוגיות|עוגות|מאפים|מנות|מגשים|מארזים)/i);
   if(!yieldM)warnings.push('לא נמצאה תפוקה מדויקת. אפשר לשמור את המתכון בלי תפוקה ולהשלים אותה מאוחר יותר.');
+  const category=recipeCategoryFromText(finalName)!=='אחר'?recipeCategoryFromText(finalName):recipeCategoryFromText(raw),yieldUnit=yieldM?.[2]||'',salesUnit=/שק/.test(yieldUnit)?'שקיות':/מגש/.test(yieldUnit)?'מגשים':/מארז/.test(yieldUnit)?'מארזים':/עוגות/.test(yieldUnit)||['עוגות','עוגות שמרים','קינוחים','מאפינס וקאפקייקס','טארטים ופאי','מאפים'].includes(category)?'יחידות':/יחיד|עוגי|מאפ|מנות/.test(yieldUnit)?'יחידות':'שקיות';
   const packageM=raw.match(/(?:שקית|אריזה)[^\d]{0,12}(\d+(?:[.,]\d+)?)\s*גרם/i);
-  return{name:finalName,category:recipeCategoryFromText(finalName+' '+raw),packageWeight:packageM?Number(packageM[1].replace(',','.')):200,yieldUnits:yieldM?Number(yieldM[1]):0,unitWeight:0,prepMin:prep?Number(prep[1]):30,restMin:0,bakeMin:bakeRange?Number(bakeRange[2]||bakeRange[1]):bake?Number(bake[1]):0,ovenTemp:temp?Number(temp[1]):0,traysPerBatch:1,unitsPerTray:12,shelfLifeDays:4,wastePct:5,evaporationPct:12,salePrice:0,allergens:inferAllergens(allIngredients),notes:main.notes.join('\n'),ingredients:main.ingredients,steps:main.steps,bakingSteps:main.bakingSteps,subRecipes,warnings,recipeType:subRecipes.length?'composite':'simple'};
+  return{name:finalName,category,salesUnit,packageWeight:packageM?Number(packageM[1].replace(',','.')):200,yieldUnits:yieldM?Number(yieldM[1]):0,unitWeight:0,prepMin:prep?Number(prep[1]):0,restMin:0,bakeMin:bakeRange?Number(bakeRange[2]||bakeRange[1]):0,ovenTemp:temp?Number(temp[1]):0,traysPerBatch:1,unitsPerTray:12,shelfLifeDays:4,wastePct:5,evaporationPct:12,salePrice:0,allergens:inferAllergens(allIngredients),notes:main.notes.join('\n'),ingredients:main.ingredients,steps:main.steps,bakingSteps:main.bakingSteps,subRecipes,warnings,recipeType:subRecipes.length?'composite':'simple'};
 }
-function sanitizeIngredient(i){const item=normalizeRecipeIngredient(i);return{...item,linkedSubRecipeId:String(i?.linkedSubRecipeId||'')}}
-function sanitizeStep(s){return{text:String(s?.text||s||'').trim(),daysBefore:Math.max(0,Number(s?.daysBefore||0)),time:String(s?.time||''),durationMin:Math.max(0,Number(s?.durationMin||0))}}
+function sanitizeIngredient(i){const item=normalizeRecipeIngredient(i);return{...item,asNeeded:!!i?.asNeeded,alternatives:Array.isArray(i?.alternatives)?i.alternatives:[],linkedSubRecipeId:String(i?.linkedSubRecipeId||'')}}
+function sanitizeStep(s){return{text:String(s?.text||s||'').trim(),daysBefore:Math.max(0,Number(s?.daysBefore||0)),time:String(s?.time||''),durationMin:Math.max(0,Number(s?.durationMin||0)),passiveMin:Math.max(0,Number(s?.passiveMin||0)),ovenTemp:Math.max(0,Number(s?.ovenTemp||0)),notes:String(s?.notes||''),kind:String(s?.kind||'הכנה')}}
 function sanitizeImportedRecipe(data,text){
   const base=localParseRecipe(text),x=data&&typeof data==='object'?data:{},structured=base.ingredients.length>=2&&(base.steps.length+base.bakingSteps.length)>=2;
   const subsSource=structured?base.subRecipes:(Array.isArray(x.subRecipes)?x.subRecipes:base.subRecipes);
-  const subs=subsSource.map((s,index)=>({id:String(s.id||id('sub')),name:String(s.name||`תת־מתכון ${index+1}`),usedQtyGrams:Math.max(0,Math.round(Number(s.usedQtyGrams||0))),evaporationPct:Math.max(0,Number(s.evaporationPct||0)),prepMin:Math.max(0,Number(s.prepMin||0)),restMin:Math.max(0,Number(s.restMin||0)),bakeMin:Math.max(0,Number(s.bakeMin||0)),ovenTemp:Math.max(0,Number(s.ovenTemp||0)),notes:String(s.notes||''),ingredients:(Array.isArray(s.ingredients)?s.ingredients:[]).map(sanitizeIngredient).filter(i=>i.name&&i.qty),steps:(Array.isArray(s.steps)?s.steps:[]).map(sanitizeStep).filter(s=>s.text)}));
+  const subs=subsSource.map((s,index)=>({id:String(s.id||id('sub')),name:String(s.name||`תת־מתכון ${index+1}`),usedQtyGrams:Math.max(0,Math.round(Number(s.usedQtyGrams||0))),evaporationPct:Math.max(0,Number(s.evaporationPct||0)),prepMin:Math.max(0,Number(s.prepMin||0)),restMin:Math.max(0,Number(s.restMin||0)),bakeMin:Math.max(0,Number(s.bakeMin||0)),ovenTemp:Math.max(0,Number(s.ovenTemp||0)),notes:String(s.notes||''),ingredients:(Array.isArray(s.ingredients)?s.ingredients:[]).map(sanitizeIngredient).filter(i=>i.name&&(i.qty||i.asNeeded)),steps:(Array.isArray(s.steps)?s.steps:[]).map(sanitizeStep).filter(s=>s.text)}));
   const ingredientSource=structured?base.ingredients:(Array.isArray(x.ingredients)?x.ingredients:base.ingredients);
-  const ingredients=ingredientSource.map(sanitizeIngredient).filter(i=>i.name&&i.qty);
+  const ingredients=ingredientSource.map(sanitizeIngredient).filter(i=>i.name&&(i.qty||i.asNeeded));
   ingredients.forEach(i=>{if(!i.linkedSubRecipeId){const m=subs.find(s=>ingredientNamesMatch(i.name,s.name));if(m)i.linkedSubRecipeId=m.id}});
   subs.forEach(s=>{const i=ingredients.find(x=>x.linkedSubRecipeId===s.id||ingredientNamesMatch(x.name,s.name));if(i){i.linkedSubRecipeId=s.id;s.usedQtyGrams=ingredientWeightData(i).grams||s.usedQtyGrams}});
   const steps=(structured?base.steps:(Array.isArray(x.steps)?x.steps:base.steps)).map(sanitizeStep).filter(s=>s.text);
@@ -1123,17 +1110,17 @@ function weightCalculator(r){
 }
 
 function importRecipeModal(){modal('הדבקת מתכון חכמה',`<div class="field"><label>הדביקי את המתכון המלא</label><textarea id="recipeImportText" class="recipe-import-text" placeholder="שם המתכון\n\nתת־מתכון: טופי בייטס\n115 גרם חמאה...\n\nלעוגיות\n220 גרם קמח...\n\nאופן הכנה:\n..."></textarea><div class="hint">המערכת מפרידה בין מצרכים, פעולות, טיפים ותתי־מתכונים. היא מציגה סתירות וחוסרים לבדיקה ולא שומרת אוטומטית.</div></div><div id="recipeImportStatus"></div><div class="actions" style="margin-top:14px"><button class="btn secondary" type="button" onclick="App.analyzeRecipeImport()">ניתוח והצגת מסך בדיקה</button><button class="btn ghost" type="button" onclick="App.close()">ביטול</button></div>`);setTimeout(()=>document.getElementById('recipeImportText')?.focus(),50)}
-async function analyzeRecipeImport(){const text=document.getElementById('recipeImportText')?.value.trim(),status=document.getElementById('recipeImportStatus');if(!text)return alert('יש להדביק מתכון');if(status)status.innerHTML='<div class="notice" style="margin-top:12px">מנתחת מצרכים, שלבים ותתי־מתכונים…</div>';const ai=await parseRecipeWithAI(text);pendingImport=sanitizeImportedRecipe(ai||localParseRecipe(text),text);reviewImportedRecipe(pendingImport)}
+async function analyzeRecipeImport(){const text=document.getElementById('recipeImportText')?.value.trim(),status=document.getElementById('recipeImportStatus');if(!text)return alert('יש להדביק מתכון');if(status)status.innerHTML='<div class="notice" style="margin-top:12px">מנתחת מקומית מצרכים, שלבים, חלופות ותתי־מתכונים…</div>';pendingImport=sanitizeImportedRecipe(localParseRecipe(text),text);reviewImportedRecipe(pendingImport)}
 function reviewImportedRecipe(r){
   const allIngredients=[...(r.ingredients||[]),...(r.subRecipes||[]).flatMap(s=>(s.ingredients||[]).map(i=>({...i,source:s.name})))],allSteps=combinedRecipeSteps({...r,id:'pending'});
-  modal('בדיקת המתכון',`${r.warnings?.length?`<div class="notice warning"><strong>כדאי לבדוק:</strong><ul class="warning-list">${r.warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></div>`:'<div class="notice success">המתכון נקרא בהצלחה.</div>'}<div class="import-clean-preview"><h3>${esc(r.name)}</h3><div class="import-preview-columns"><div class="card"><h3>רכיבים</h3><ul class="ingredient-list">${allIngredients.map(i=>`<li><strong>${fmtQty(i.qty,i.unit)} ${esc(normalizedRecipeUnit(i.unit))}</strong> ${esc(i.name)}${i.source?` <small>· ${esc(i.source)}</small>`:''}</li>`).join('')||'<li>לא זוהו רכיבים</li>'}</ul></div><div class="card"><h3>אופן ההכנה</h3><ol class="steps-list">${allSteps.map(s=>`<li>${esc(s.text)}</li>`).join('')||'<li>לא זוהו שלבים</li>'}</ol></div></div></div><div class="actions" style="margin-top:14px"><button class="btn secondary" onclick="App.openPendingRecipe()">פתיחה לעריכה ושמירה</button><button class="btn ghost" onclick="App.close()">ביטול</button></div>`)
+  modal('בדיקת המתכון',`${r.warnings?.length?`<div class="notice warning"><strong>כדאי לבדוק:</strong><ul class="warning-list">${r.warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></div>`:'<div class="notice success">המתכון נקרא בהצלחה.</div>'}<div class="import-clean-preview"><h3>${esc(r.name)}</h3><div class="import-preview-columns"><div class="card"><h3>רכיבים</h3><ul class="ingredient-list">${allIngredients.map(i=>`<li><strong>${i.asNeeded?'לפי הצורך':`${fmtQty(i.qty,i.unit)} ${esc(normalizedRecipeUnit(i.unit))}`}</strong> ${esc(i.name)}${i.source?` <small>· ${esc(i.source)}</small>`:''}${i.alternatives?.length?`<div class="meta">או: ${i.alternatives.map(a=>a?.name?`${fmtQty(a.qty,a.unit)} ${esc(normalizedRecipeUnit(a.unit))} ${esc(a.name)}`:esc(a?.text||'')).join(' / ')}</div>`:''}</li>`).join('')||'<li>לא זוהו רכיבים</li>'}</ul></div><div class="card"><h3>אופן ההכנה</h3><ol class="steps-list">${allSteps.map(s=>`<li>${esc(s.text)}</li>`).join('')||'<li>לא זוהו שלבים</li>'}</ol></div></div></div><div class="actions" style="margin-top:14px"><button class="btn secondary" onclick="App.openPendingRecipe()">פתיחה לעריכה ושמירה</button><button class="btn ghost" onclick="App.close()">ביטול</button></div>`)
 }
 function recipeBookCard(r,index=0){const p=packageSummary(r),minutes=Number(r.prepMin||0)+Number(r.bakeMin||0),tasks=groupedWorkflowFromRecipe(r).length,unit=salesUnitLabel(r),cost=recipeCost(r);return`<article class="recipe-book-card" data-search="${esc((r.name+' '+r.category).toLowerCase())}" data-category="${esc(r.category||'אחר')}" style="--book-index:${index}"><button class="recipe-book-cover" onclick="App.openBookRecipe('${r.id}')"><span class="recipe-book-glow"></span><div class="recipe-book-cover-top"><span class="recipe-book-category">${esc(r.category||'מתכון')}${r.subRecipes?.length?' · מורכב':''}</span><span class="recipe-book-symbol">✦</span></div><div class="recipe-book-title"><h3>${esc(r.name)}</h3><p>${r.subRecipes?.length?`${r.subRecipes.length} תתי־מתכונים`:'מתכון רגיל'}${tasks?` · ${tasks} משימות להזמנה`:''}</p></div><div class="recipe-book-metrics"><span><strong>${fmt(minutes,0)}</strong><small>דקות</small></span><span><strong>${recipeYieldUnits(r)}</strong><small>${esc(unit)}</small></span><span class="clickable-cost" role="button" tabindex="0" title="פתיחת פירוט עלות" onclick="event.stopPropagation();App.recipeCostBreakdown('${r.id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();App.recipeCostBreakdown('${r.id}')}"><strong>${cost.perUnit!==null?money(cost.perUnit):'לא חושב'}</strong><small>עלות ל${esc(salesUnitSingular(unit))}</small></span></div><div class="recipe-book-open">פתיחת המתכון <span>←</span></div></button><div class="recipe-book-actions"><button class="btn small secondary" onclick="App.openBookRecipe('${r.id}')">פתיחה</button><button class="btn small ghost" onclick="App.weightCalc('${r.id}')">התאמת כמות</button><button class="btn small ghost" onclick="App.editRecipe('${r.id}')">עריכה</button></div></article>`}
 function renderRecipeBook(){const cats=[...new Set(state.recipes.map(r=>r.category||'אחר'))].sort((a,b)=>a.localeCompare(b,'he')),totalBags=state.recipes.reduce((sum,r)=>sum+packageSummary(r).fullBags,0),complex=state.recipes.filter(r=>r.subRecipes?.length).length;document.getElementById('view-recipebook').innerHTML=`<section class="recipe-library"><div class="recipe-library-hero"><div class="recipe-library-copy"><span class="recipe-library-eyebrow">ספר העבודה שלך</span><h2>כל המתכונים, במקום אחד שנעים לעבוד בו</h2><p>חיפוש מהיר, פתיחה חלקה ונתוני תפוקה ברורים — בלי עומס ובלי טבלאות צפופות.</p><div class="recipe-library-actions"><button class="btn secondary" onclick="App.importRecipe()">✨ הדבקת מתכון</button><button class="btn ghost" onclick="App.newRecipe()">+ מתכון חדש</button></div></div><div class="recipe-library-summary"><div><strong>${state.recipes.length}</strong><span>מתכונים</span></div><div><strong>${complex}</strong><span>מורכבים</span></div><div><strong>${totalBags}</strong><span>שקיות בתפוקה</span></div><span class="recipe-library-orbit one"></span><span class="recipe-library-orbit two"></span></div></div><div class="recipe-book-toolbar premium"><label class="recipe-book-search"><span>⌕</span><input id="recipeBookSearch" type="search" placeholder="חיפוש לפי שם או קטגוריה…" oninput="App.filterRecipeBook()"></label><label class="recipe-book-select"><span>קטגוריה</span><select id="recipeBookCategory" onchange="App.filterRecipeBook()"><option value="">הכול</option>${cats.map(c=>`<option>${esc(c)}</option>`).join('')}</select></label></div><div id="recipeBookGrid" class="recipe-book-grid premium-grid">${state.recipes.map((r,i)=>recipeBookCard(r,i)).join('')||'<div class="empty">עדיין אין מתכונים בספר.</div>'}</div></section>`}
 function filterRecipeBook(){const q=String(document.getElementById('recipeBookSearch')?.value||'').toLowerCase().trim(),cat=document.getElementById('recipeBookCategory')?.value||'';document.querySelectorAll('#recipeBookGrid .recipe-card').forEach(card=>{card.hidden=!((!q||card.dataset.search.includes(q))&&(!cat||card.dataset.category===cat))})}
 function ingredientDisplay(i,linkMap={}){
-  const link=i.linkedSubRecipeId&&linkMap[i.linkedSubRecipeId];
-  return`<li><strong>${fmtQty(i.qty,i.unit)} ${esc(normalizedRecipeUnit(i.unit))}</strong> ${link?`<button type="button" class="ingredient-link" onclick="App.openSubRecipeFromIngredient('${esc(link.pane)}')">${esc(i.name)} <span aria-hidden="true">↗</span></button>`:esc(i.name)}</li>`;
+  const link=i.linkedSubRecipeId&&linkMap[i.linkedSubRecipeId],qty=i.asNeeded?'לפי הצורך':`${fmtQty(i.qty,i.unit)} ${esc(normalizedRecipeUnit(i.unit))}`,alts=(i.alternatives||[]).map(a=>a?.name?`${fmtQty(a.qty,a.unit)} ${normalizedRecipeUnit(a.unit)} ${a.name}`:String(a?.text||'')).filter(Boolean);
+  return`<li><strong>${qty}</strong> ${link?`<button type="button" class="ingredient-link" onclick="App.openSubRecipeFromIngredient('${esc(link.pane)}')">${esc(i.name)} <span aria-hidden="true">↗</span></button>`:esc(i.name)}${alts.length?`<div class="meta">או: ${alts.map(esc).join(' / ')}</div>`:''}</li>`;
 }
 function stepsBlock(title,steps){return`<div class="card"><h3>${esc(title)}</h3><ol class="steps-list">${(steps||[]).map(s=>`<li>${esc(s.text)}</li>`).join('')||'<li>לא הוזנו שלבים</li>'}</ol></div>`}
 function combinedRecipeSteps(r){
