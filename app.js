@@ -335,7 +335,7 @@ function recipeCostBreakdown(recipeId){
   modal(`פירוט עלות — ${r.name}`,`<div class="cost-breakdown-head"><div><span>עלות חומרי גלם למתכון</span><strong>${money(c.total)}</strong></div><div><span>תפוקה</span><strong>${yieldCount?`${yieldCount} ${esc(unit)}`:'לא הוגדר'}</strong></div><div><span>עלות ל${esc(salesUnitSingular(unit))}</span><strong>${perUnitText}</strong></div></div><div class="notice">החישוב כולל חומרי גלם ופחת בלבד. שכר עבודה ועלות אריזה אינם נכללים.</div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>רכיב</th><th>כמות</th><th>מחיר שנמצא</th><th>עלות במתכון</th></tr></thead><tbody>${rows.map(i=>`<tr><td><strong>${esc(i.name)}</strong>${i.sourceSubRecipe?`<div class="meta">מתוך ${esc(i.sourceSubRecipe)}</div>`:''}</td><td>${fmtQty(i.qty,i.unit)} ${esc(normalizedRecipeUnit(i.unit))}</td><td>${i.detail?`${esc(i.detail.supplierName)} · ${money(i.detail.packPrice)} / ${fmtQty(i.detail.packQty,i.detail.unit)} ${esc(normalizedRecipeUnit(i.detail.unit))}`:'<span class="muted">אין מחיר תואם</span>'}</td><td class="money">${money(i.cost)}</td></tr>`).join('')}</tbody></table></div>`)
 }
 
-/* ניתוח מתכונים מקומי — v11.9: ניקוי, נרמול והבנת מבנה גמישה */
+/* ניתוח מתכונים מקומי — v12.0: מספור שלבי הכנה מקבל קדימות על כותרות/הערות פנימיות */
 const FRACTION_VALUES={'½':.5,'¼':.25,'¾':.75,'⅓':1/3,'⅔':2/3,'⅛':.125,'⅜':.375,'⅝':.625,'⅞':.875,'חצי':.5,'רבע':.25,'שליש':1/3};
 const HEB_NUMBER_VALUES={'אחד':1,'אחת':1,'שני':2,'שתי':2,'שניים':2,'שתיים':2,'שלושה':3,'שלוש':3,'ארבעה':4,'ארבע':4,'חמישה':5,'חמש':5,'שישה':6,'שש':6,'שבעה':7,'שבע':7,'שמונה':8,'תשעה':9,'תשע':9,'עשרה':10,'עשר':10};
 const UNIT_ALIASES=[
@@ -505,7 +505,7 @@ function inferStepMeta(text,kindHint=''){
 }
 function localParseRecipe(text){
   const cleaned=cleanRecipePaste(text),raw=cleaned,lines=cleaned.split('\n').map(x=>x.trim()).filter(Boolean);
-  let originalTitle='',mode='unknown',current=null,mainSection=null;const sections=[],warnings=[];
+  let originalTitle='',mode='unknown',current=null,mainSection=null,inMethod=false;const sections=[],warnings=[];
   const findSection=name=>sections.find(s=>cleanIngredientName(s.name)===cleanIngredientName(normalizeSectionName(name)));
   const useSection=(name,role='auto')=>{const clean=normalizeSectionName(name)||originalTitle||'מתכון ראשי';current=findSection(clean)||{id:id('sub'),name:clean,role,ingredients:[],steps:[],bakingSteps:[],notes:[]};if(role!=='auto')current.role=role;if(!sections.includes(current))sections.push(current);if(current.role==='main'&&!mainSection)mainSection=current;return current};
   const useMain=()=>{if(mainSection){current=mainSection;return current}mainSection=useSection(originalTitle||'מתכון ראשי','main');return mainSection};
@@ -525,15 +525,31 @@ function localParseRecipe(text){
     m=plain.match(/^(.+?)\s*:\s*(.+)$/i);
     if(m&&isSubRecipeHeading(m[1])&&parseIngredientLine(m[2])){useSection(m[1],'sub');const inline=parseIngredientLine(m[2]);current.ingredients.push(inline);lastIngredient=inline;mode='ingredients';continue}
     m=plain.match(/^(?:מצרכים|רכיבים|חומרים|מה צריך|מה צריכים)\s+(?:ל|עבור)?\s*(.+?)\s*:?$/i);
-    if(m){const heading=normalizeSectionName(m[1]);if(isMainIngredientSubsectionHeading(heading)||/^(?:ה)?בצק(?:\s|$)/.test(cleanIngredientName(heading))){useMain()}else if(isSubRecipeHeading(heading)){useSection(heading,'sub')}else useMain();mode='ingredients';continue}
-    if(/^(?:מצרכים|רכיבים|חומרים|מה צריך|מה צריכים|ingredients)\s*:?$/i.test(plain)){useMain();mode='ingredients';continue}
+    if(m){const heading=normalizeSectionName(m[1]);if(isMainIngredientSubsectionHeading(heading)||/^(?:ה)?בצק(?:\s|$)/.test(cleanIngredientName(heading))){useMain()}else if(isSubRecipeHeading(heading)){useSection(heading,'sub')}else useMain();mode='ingredients';inMethod=false;continue}
+    if(/^(?:מצרכים|רכיבים|חומרים|מה צריך|מה צריכים|ingredients)\s*:?$/i.test(plain)){useMain();mode='ingredients';inMethod=false;continue}
     m=plain.match(/^(.+?)\s+(?:אופן\s+ההכנה|אופן\s+הכנה|הוראות\s+הכנה)\s*:?$/i);
-    if(m){const heading=normalizeSectionName(m[1]);if(isSubRecipeHeading(heading))useSection(heading,'sub');else useMain();mode='steps';continue}
+    if(m){const heading=normalizeSectionName(m[1]);if(isSubRecipeHeading(heading))useSection(heading,'sub');else useMain();mode='steps';inMethod=true;continue}
     m=plain.match(/^(?:אופן\s+הכנת|הוראות\s+הכנת)\s+(.+?)\s*:?$/i)||plain.match(/^אופן\s+ההכנה\s+(?:ל|של)\s*(.+?)\s*:?$/i);
     if(m){const heading=normalizeSectionName(m[1]);if(isSubRecipeHeading(heading))useSection(heading,'sub');else useMain();mode='steps';continue}
-    if(/^(?:אופן\s+הכנה|אופן\s+ההכנה|הוראות(?:\s+הכנה)?|הכנה|שלבי\s+הכנה|איך\s+מכינים|דרך\s+הכנה|method|instructions)\s*:?$/i.test(plain)){useMain();mode='steps';continue}
-    if(/^(?:אפייה|שלב\s+האפייה)\s*:?$/i.test(plain)){useMain();mode='baking';continue}
-    if(/^(?:הערות|טיפים|אחסון|אחסון\s+וחיי\s+מדף)\s*:?$/i.test(plain)){if(!current)useMain();mode='notes';continue}
+    if(/^(?:אופן\s+הכנה|אופן\s+ההכנה|הוראות(?:\s+הכנה)?|הכנה|שלבי\s+הכנה|איך\s+מכינים|דרך\s+הכנה|method|instructions)\s*:?$/i.test(plain)){useMain();mode='steps';inMethod=true;continue}
+    if(/^(?:אפייה|שלב\s+האפייה)\s*:?$/i.test(plain)){useMain();mode='baking';inMethod=true;continue}
+    if(/^(?:הערות|טיפים|אחסון|אחסון\s+וחיי\s+מדף)\s*:?$/i.test(plain)){if(!current)useMain();mode='notes';inMethod=false;continue}
+    // Once a real method section has started, an explicitly numbered line is always a method step.
+    // Colons, bold sub-headings and words such as "חשוב" inside the step must never turn the rest into notes.
+    const numberedMethod=plain.match(/^(\d{1,3})[.)]\s*(.+)$/);
+    if(inMethod&&numberedMethod){
+      if(!current)useMain();
+      const stepText=numberedMethod[2].trim();
+      const systemNoteAt=stepText.search(/הערת המערכת\s*:/i);
+      const mainText=(systemNoteAt>=0?stepText.slice(0,systemNoteAt):stepText).trim().replace(/[.;,:-]+$/,'');
+      const systemNote=systemNoteAt>=0?stepText.slice(systemNoteAt).trim():'';
+      if(mainText){
+        const meta=inferStepMeta(mainText,mode==='baking'?'אפייה':'');
+        if(mode==='baking')current.bakingSteps.push(meta);else current.steps.push(meta);
+      }
+      if(systemNote)current.notes.push(systemNote);
+      continue;
+    }
     if(isMainIngredientSubsectionHeading(plain)){useMain();mode=/אפייה/.test(cleanIngredientName(plain))?'baking':(/הרכבה|התפחה|עיצוב|סיום|גימור/.test(cleanIngredientName(plain))?'steps':'ingredients');continue}
     if(mode!=='steps'&&mode!=='baking'&&isSubRecipeHeading(plain)&&line.length<70&&!parseIngredientLine(line)){useSection(plain,'sub');mode='ingredients';continue}
     if(isMainMethodHeading(plain)){useMain();mode=/אפייה/.test(cleanIngredientName(plain))?'baking':'steps';continue}
@@ -549,7 +565,7 @@ function localParseRecipe(text){
     if(/^מומלץ\b/.test(cleanIngredientName(clean))){if(!current)useMain();current.notes.push(clean);continue}
     const systemNoteAt=clean.search(/הערת המערכת\s*:/i);if(systemNoteAt>0){if(!current)useMain();const before=clean.slice(0,systemNoteAt).trim().replace(/[.;,:-]+$/,'');const note=clean.slice(systemNoteAt).trim();if(before)current.steps.push(inferStepMeta(before));if(note)current.notes.push(note);mode='steps';continue}
     if(current?.role==='sub'&&/(?:לחלק את הבצק|לרדד (?:את )?הבצק|לרדד כל חלק|לעצב (?:את )?הבצק|להתפיח .*?(?:מאפ|בצק)|לאפות .*?(?:מאפ|עוג|בצק))/i.test(cleanIngredientName(clean))){useMain();mode='steps'}
-    if(isNoteLine(clean)||mode==='notes'){if(!current)useMain();current.notes.push(clean);mode='notes';continue}
+    if(mode==='notes'||(!inMethod&&isNoteLine(clean))){if(!current)useMain();current.notes.push(clean);mode='notes';continue}
     if(mode==='baking'){if(!current)useMain();current.bakingSteps.push(inferStepMeta(clean,'אפייה'));continue}
     if(isActionLine(clean)||mode==='steps'||sections.some(s=>s.ingredients.length)){if(!current)useMain();current.steps.push(inferStepMeta(clean));mode='steps';continue}
   }
@@ -1547,7 +1563,7 @@ function initServiceWorkerUpdates(){
   };
   window.addEventListener('load',async()=>{
     try{
-      const registration=await navigator.serviceWorker.register('./sw.js?v=1170',{updateViaCache:'none'});
+      const registration=await navigator.serviceWorker.register('./sw.js?v=1200',{updateViaCache:'none'});
       inspect(registration);
       await registration.update();
       const check=()=>registrationRef?.update().catch(()=>{});
