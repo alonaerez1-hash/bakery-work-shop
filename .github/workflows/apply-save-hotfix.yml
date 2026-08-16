@@ -1,4 +1,4 @@
-name: Restore app and apply safe save fix
+name: Fix repeated recipe saves
 
 on:
   push:
@@ -15,16 +15,104 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Restore complete app from 12.4
-        run: git show 21106b2adec1daeabb1d8982253a5da76171fc94:app.js > app.js
-      - name: Apply targeted save patch
-        run: python3 -c "import base64;exec(base64.b64decode('ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpwPVBhdGgoImFwcC5qcyIpCnM9cC5yZWFkX3RleHQoZW5jb2Rpbmc9InV0Zi04IikKCm9sZDE9ImlmKGRldmljZU9rKXtzZXRTdGF0dXMoJ+KckyDXoNep157XqCcpO3NldFRpbWVvdXQoKCk9PnNldFN0YXR1cygnJyksMTIwMCl9IgpuZXcxPSJpZihkZXZpY2VPayl7bW9kYWxEaXJ0eT1mYWxzZTtzZXRTdGF0dXMoJ+KckyDXoNep157XqCcpO3NldFRpbWVvdXQoKCk9PnNldFN0YXR1cygnJyksMTIwMCl9IgppZiBvbGQxIG5vdCBpbiBzOiByYWlzZSBTeXN0ZW1FeGl0KCJkZXZpY2Ugc2F2ZSBtYXJrZXIgbm90IGZvdW5kIikKcz1zLnJlcGxhY2Uob2xkMSxuZXcxLDEpCgpvbGQyPSJpZihjbG91ZEF0dGVtcHRlZCljbG91ZE9rPWF3YWl0IHB1c2hDbG91ZCgpOyIKbmV3Mj0iaWYoY2xvdWRBdHRlbXB0ZWQmJmRldmljZU9rKXtwdXNoQ2xvdWQoKS50aGVuKG9rPT57aWYoIW9rKXtzZXRTdGF0dXMoJ+KaoCDXoNep157XqCDXkdee15vXqdeZ16gsINeU16HXoNeb16jXldefINec16LXoNefINeg15vXqdecJyk7c2hvd1RvYXN0KCfXoNep157XqCDXkdee15vXqdeZ16g7INeU16HXoNeb16jXldefINec16LXoNefINeZ16DXodeUINep15XXkScsJ2Vycm9yJyl9fSkuY2F0Y2goZXJyb3I9Pntjb25zb2xlLmVycm9yKCdiYWNrZ3JvdW5kIGNsb3VkIHNhdmUgZmFpbGVkJyxlcnJvcik7c2V0U3RhdHVzKCfimqAg16DXqdee16gg15HXnteb16nXmdeoLCDXlNeh16DXm9eo15XXnyDXnNei16DXnyDXoNeb16nXnCcpfSk7Y2xvdWRPaz10cnVlfWVsc2UgaWYoY2xvdWRBdHRlbXB0ZWQpY2xvdWRPaz1hd2FpdCBwdXNoQ2xvdWQoKTsiCmlmIG9sZDIgbm90IGluIHM6IHJhaXNlIFN5c3RlbUV4aXQoImNsb3VkIHNhdmUgbWFya2VyIG5vdCBmb3VuZCIpCnM9cy5yZXBsYWNlKG9sZDIsbmV3MiwxKQoKcz1zLnJlcGxhY2UoIi4vc3cuanM/dj0xMjMwIiwiLi9zdy5qcz92PTEyMzIiKS5yZXBsYWNlKCIuL3N3LmpzP3Y9MTIzMSIsIi4vc3cuanM/dj0xMjMyIikKcC53cml0ZV90ZXh0KHMsZW5jb2Rpbmc9InV0Zi04IikKCnA9UGF0aCgiaW5kZXguaHRtbCIpCnQ9cC5yZWFkX3RleHQoZW5jb2Rpbmc9InV0Zi04IikucmVwbGFjZSgidj0xMjMwIiwidj0xMjMyIikucmVwbGFjZSgidj0xMjMxIiwidj0xMjMyIikKcC53cml0ZV90ZXh0KHQsZW5jb2Rpbmc9InV0Zi04IikKCnA9UGF0aCgic3cuanMiKQp0PXAucmVhZF90ZXh0KGVuY29kaW5nPSJ1dGYtOCIpLnJlcGxhY2UoImJha2VyeS13b3Jrc3BhY2UtdjEyMzAiLCJiYWtlcnktd29ya3NwYWNlLXYxMjMyIikucmVwbGFjZSgiYmFrZXJ5LXdvcmtzcGFjZS12MTIzMSIsImJha2VyeS13b3Jrc3BhY2UtdjEyMzIiKS5yZXBsYWNlKCJ2PTEyMzAiLCJ2PTEyMzIiKS5yZXBsYWNlKCJ2PTEyMzEiLCJ2PTEyMzIiKQpwLndyaXRlX3RleHQodCxlbmNvZGluZz0idXRmLTgiKQo='))"
+      - name: Patch repeated save flow
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path('app.js')
+          s = p.read_text(encoding='utf-8')
+          old = """async function persist(sync=true){
+  state.updatedAt=new Date().toISOString();
+  const snapshot=localStateSnapshot(),localOk=saveLocalSnapshot(),indexedOk=await saveIndexedSnapshot(snapshot);let cloudOk=true,cloudAttempted=!!(sync&&cloud.user);
+  const deviceOk=localOk||indexedOk;
+  if(deviceOk){modalDirty=false;setStatus('✓ נשמר');setTimeout(()=>setStatus(''),1200)}
+  if(cloudAttempted&&deviceOk){pushCloud().then(ok=>{if(!ok){setStatus('⚠ נשמר במכשיר, הסנכרון לענן נכשל');showToast('נשמר במכשיר; הסנכרון לענן ינסה שוב','error')}}).catch(error=>{console.error('background cloud save failed',error);setStatus('⚠ נשמר במכשיר, הסנכרון לענן נכשל')});cloudOk=true}else if(cloudAttempted)cloudOk=await pushCloud();
+  const saved=deviceOk||(cloudAttempted&&cloudOk);
+  if(saved)modalDirty=false;
+  if(!saved){setStatus('⚠ השמירה נכשלה');showToast('השמירה נכשלה','error');showSaveOverlay('השמירה נכשלה',false)}
+  else if(!deviceOk&&cloudAttempted&&cloudOk){setStatus('✓ נשמר בענן');showToast('נשמר בענן ✓','success');showSaveOverlay('נשמר בענן ✓',true)}
+  if(saveFeedbackButton){
+    if(saved)finishSaveFeedback(true,deviceOk?'נשמר בהצלחה':'נשמר בענן');
+    else finishSaveFeedback(false,'השמירה נכשלה');
+  }
+  return saved;
+}
+"""
+          new = """async function persist(sync=true){
+  state.updatedAt=new Date().toISOString();
+  const snapshot=localStateSnapshot(),localOk=saveLocalSnapshot(),cloudAttempted=!!(sync&&cloud.user);
+  let indexedOk=false,cloudOk=false;
+
+  if(localOk){
+    modalDirty=false;
+    setStatus('✓ נשמר');
+    setTimeout(()=>setStatus(''),1200);
+    saveIndexedSnapshot(snapshot).catch(error=>console.warn('background IndexedDB backup failed',error));
+    if(cloudAttempted){
+      pushCloud().then(ok=>{if(!ok){setStatus('⚠ נשמר במכשיר, הסנכרון לענן נכשל');showToast('נשמר במכשיר; הסנכרון לענן ינסה שוב','error')}}).catch(error=>{console.error('background cloud save failed',error);setStatus('⚠ נשמר במכשיר, הסנכרון לענן נכשל')});
+    }
+    if(saveFeedbackButton)finishSaveFeedback(true,'נשמר בהצלחה');
+    return true;
+  }
+
+  try{
+    indexedOk=await Promise.race([
+      saveIndexedSnapshot(snapshot),
+      new Promise(resolve=>setTimeout(()=>resolve(false),2500))
+    ]);
+  }catch(error){
+    console.warn('IndexedDB save fallback failed',error);
+    indexedOk=false;
+  }
+
+  if(indexedOk){
+    modalDirty=false;
+    setStatus('✓ נשמר');
+    setTimeout(()=>setStatus(''),1200);
+    if(cloudAttempted)pushCloud().catch(error=>console.error('background cloud save failed',error));
+    if(saveFeedbackButton)finishSaveFeedback(true,'נשמר בהצלחה');
+    return true;
+  }
+
+  if(cloudAttempted){
+    try{cloudOk=await pushCloud()}catch(error){console.error('cloud save failed',error);cloudOk=false}
+  }
+  if(cloudOk){
+    modalDirty=false;
+    setStatus('✓ נשמר בענן');
+    if(saveFeedbackButton)finishSaveFeedback(true,'נשמר בענן');
+    else{showToast('נשמר בענן ✓','success');showSaveOverlay('נשמר בענן ✓',true)}
+    return true;
+  }
+
+  setStatus('⚠ השמירה נכשלה');
+  if(saveFeedbackButton)finishSaveFeedback(false,'השמירה נכשלה');
+  else{showToast('השמירה נכשלה','error');showSaveOverlay('השמירה נכשלה',false)}
+  return false;
+}
+"""
+          if old not in s:
+              raise SystemExit('current persist block not found')
+          s = s.replace(old, new, 1)
+          s = s.replace('./sw.js?v=1232', './sw.js?v=1233')
+          p.write_text(s, encoding='utf-8')
+
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8').replace('v=1232','v=1233')
+          p.write_text(s, encoding='utf-8')
+
+          p = Path('sw.js')
+          s = p.read_text(encoding='utf-8').replace('bakery-workspace-v1232','bakery-workspace-v1233').replace('v=1232','v=1233')
+          p.write_text(s, encoding='utf-8')
+          PY
       - name: Verify app syntax
         run: node --check app.js
-      - name: Commit restored app
+      - name: Commit fix
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add app.js index.html sw.js
-          git commit -m '12.6 restore app and fix recipe save'
+          git commit -m '12.7 fix repeated recipe saves'
           git push origin HEAD:main
