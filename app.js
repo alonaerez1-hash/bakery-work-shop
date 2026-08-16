@@ -189,19 +189,55 @@ async function restoreDeviceSnapshot(){
 
 async function persist(sync=true){
   state.updatedAt=new Date().toISOString();
-  const snapshot=localStateSnapshot(),localOk=saveLocalSnapshot(),indexedOk=await saveIndexedSnapshot(snapshot);let cloudOk=true,cloudAttempted=!!(sync&&cloud.user);
-  const deviceOk=localOk||indexedOk;
-  if(deviceOk){modalDirty=false;setStatus('✓ נשמר');setTimeout(()=>setStatus(''),1200)}
-  if(cloudAttempted&&deviceOk){pushCloud().then(ok=>{if(!ok){setStatus('⚠ נשמר במכשיר, הסנכרון לענן נכשל');showToast('נשמר במכשיר; הסנכרון לענן ינסה שוב','error')}}).catch(error=>{console.error('background cloud save failed',error);setStatus('⚠ נשמר במכשיר, הסנכרון לענן נכשל')});cloudOk=true}else if(cloudAttempted)cloudOk=await pushCloud();
-  const saved=deviceOk||(cloudAttempted&&cloudOk);
-  if(saved)modalDirty=false;
-  if(!saved){setStatus('⚠ השמירה נכשלה');showToast('השמירה נכשלה','error');showSaveOverlay('השמירה נכשלה',false)}
-  else if(!deviceOk&&cloudAttempted&&cloudOk){setStatus('✓ נשמר בענן');showToast('נשמר בענן ✓','success');showSaveOverlay('נשמר בענן ✓',true)}
-  if(saveFeedbackButton){
-    if(saved)finishSaveFeedback(true,deviceOk?'נשמר בהצלחה':'נשמר בענן');
-    else finishSaveFeedback(false,'השמירה נכשלה');
+  const snapshot=localStateSnapshot(),localOk=saveLocalSnapshot(),cloudAttempted=!!(sync&&cloud.user);
+  let indexedOk=false,cloudOk=false;
+
+  if(localOk){
+    modalDirty=false;
+    setStatus('✓ נשמר');
+    setTimeout(()=>setStatus(''),1200);
+    saveIndexedSnapshot(snapshot).catch(error=>console.warn('background IndexedDB backup failed',error));
+    if(cloudAttempted){
+      pushCloud().then(ok=>{if(!ok){setStatus('⚠ נשמר במכשיר, הסנכרון לענן נכשל');showToast('נשמר במכשיר; הסנכרון לענן ינסה שוב','error')}}).catch(error=>{console.error('background cloud save failed',error);setStatus('⚠ נשמר במכשיר, הסנכרון לענן נכשל')});
+    }
+    if(saveFeedbackButton)finishSaveFeedback(true,'נשמר בהצלחה');
+    return true;
   }
-  return saved;
+
+  try{
+    indexedOk=await Promise.race([
+      saveIndexedSnapshot(snapshot),
+      new Promise(resolve=>setTimeout(()=>resolve(false),2500))
+    ]);
+  }catch(error){
+    console.warn('IndexedDB save fallback failed',error);
+    indexedOk=false;
+  }
+
+  if(indexedOk){
+    modalDirty=false;
+    setStatus('✓ נשמר');
+    setTimeout(()=>setStatus(''),1200);
+    if(cloudAttempted)pushCloud().catch(error=>console.error('background cloud save failed',error));
+    if(saveFeedbackButton)finishSaveFeedback(true,'נשמר בהצלחה');
+    return true;
+  }
+
+  if(cloudAttempted){
+    try{cloudOk=await pushCloud()}catch(error){console.error('cloud save failed',error);cloudOk=false}
+  }
+  if(cloudOk){
+    modalDirty=false;
+    setStatus('✓ נשמר בענן');
+    if(saveFeedbackButton)finishSaveFeedback(true,'נשמר בענן');
+    else{showToast('נשמר בענן ✓','success');showSaveOverlay('נשמר בענן ✓',true)}
+    return true;
+  }
+
+  setStatus('⚠ השמירה נכשלה');
+  if(saveFeedbackButton)finishSaveFeedback(false,'השמירה נכשלה');
+  else{showToast('השמירה נכשלה','error');showSaveOverlay('השמירה נכשלה',false)}
+  return false;
 }
 
 /* מנוע משקל והמרות. ערכי נפח ביתיים הם קירובים; גרמים מפורשים תמיד גוברים. */
@@ -1700,7 +1736,7 @@ function initServiceWorkerUpdates(){
   };
   window.addEventListener('load',async()=>{
     try{
-      const registration=await navigator.serviceWorker.register('./sw.js?v=1232',{updateViaCache:'none'});
+      const registration=await navigator.serviceWorker.register('./sw.js?v=1233',{updateViaCache:'none'});
       inspect(registration);
       await registration.update();
       const check=()=>registrationRef?.update().catch(()=>{});
