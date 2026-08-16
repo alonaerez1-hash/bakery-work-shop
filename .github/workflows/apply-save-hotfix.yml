@@ -1,0 +1,96 @@
+name: Apply recipe save hotfix
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-save-hotfix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch recipe save flow
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          app_path = Path('app.js')
+          app = app_path.read_text(encoding='utf-8')
+
+          old_persist = """async function persist(sync=true){
+  state.updatedAt=new Date().toISOString();
+  const snapshot=localStateSnapshot(),localOk=saveLocalSnapshot(),indexedOk=await saveIndexedSnapshot(snapshot);let cloudOk=true,cloudAttempted=!!(sync&&cloud.user);
+  const deviceOk=localOk||indexedOk;
+  if(deviceOk){setStatus('✓ נשמר');setTimeout(()=>setStatus(''),1200)}
+  if(cloudAttempted)cloudOk=await pushCloud();
+  const saved=deviceOk||(cloudAttempted&&cloudOk);
+  if(saved)modalDirty=false;
+  if(!saved){setStatus('⚠ השמירה נכשלה');showToast('השמירה נכשלה','error');showSaveOverlay('השמירה נכשלה',false)}
+  else if(!deviceOk&&cloudAttempted&&cloudOk){setStatus('✓ נשמר בענן');showToast('נשמר בענן ✓','success');showSaveOverlay('נשמר בענן ✓',true)}
+  if(saveFeedbackButton){
+    if(saved)finishSaveFeedback(true,deviceOk?'נשמר בהצלחה':'נשמר בענן');
+    else finishSaveFeedback(false,'השמירה נכשלה');
+  }
+  return saved;
+}"""
+
+          new_persist = """async function persist(sync=true){
+  state.updatedAt=new Date().toISOString();
+  const snapshot=localStateSnapshot(),localOk=saveLocalSnapshot(),indexedOk=await saveIndexedSnapshot(snapshot),deviceOk=localOk||indexedOk,cloudAttempted=!!(sync&&cloud.user);
+  if(deviceOk){
+    modalDirty=false;setStatus('✓ נשמר');setTimeout(()=>setStatus(''),1200);
+    if(saveFeedbackButton)finishSaveFeedback(true,'נשמר בהצלחה');
+    if(cloudAttempted){
+      pushCloud().then(ok=>{if(!ok){setStatus('⚠ נשמר במכשיר, הסנכרון לענן נכשל');showToast('נשמר במכשיר; הסנכרון לענן ינסה שוב','error')}}).catch(error=>{console.error('background cloud save failed',error);setStatus('⚠ נשמר במכשיר, הסנכרון לענן נכשל')});
+    }
+    return true;
+  }
+  let cloudOk=false;
+  if(cloudAttempted){try{cloudOk=await pushCloud()}catch(error){console.error('cloud save failed',error);cloudOk=false}}
+  if(cloudOk){modalDirty=false;setStatus('✓ נשמר בענן');showToast('נשמר בענן ✓','success');showSaveOverlay('נשמר בענן ✓',true)}
+  else{setStatus('⚠ השמירה נכשלה');showToast('השמירה נכשלה','error');showSaveOverlay('השמירה נכשלה',false)}
+  if(saveFeedbackButton){if(cloudOk)finishSaveFeedback(true,'נשמר בענן');else finishSaveFeedback(false,'השמירה נכשלה')}
+  return cloudOk;
+}"""
+
+          if old_persist not in app:
+              raise SystemExit('Expected persist() block was not found; aborting without changes.')
+          app = app.replace(old_persist, new_persist, 1)
+
+          old_validation = """if(!form.checkValidity()){endModalSave(false);const invalid=form.querySelector(':invalid'),section=invalid?.closest('.recipe-editor-step');if(section)showRecipeEditorStep(Number(section.dataset.recipeStep));invalid?.reportValidity();invalid?.focus();return}"""
+          new_validation = """if(!form.checkValidity()){endModalSave(false);const invalid=form.querySelector(':invalid'),section=invalid?.closest('.recipe-editor-step');if(saveFeedbackButton){const button=saveFeedbackButton;saveFeedbackButton=null;button.disabled=false;button.textContent=button.dataset.saveOriginal||'שמירת מתכון'}setStatus('⚠ יש שדה שצריך השלמה');showToast('יש שדה שצריך השלמה במתכון','error');if(section)showRecipeEditorStep(Number(section.dataset.recipeStep));invalid?.reportValidity();invalid?.focus();return}"""
+          if old_validation not in app:
+              raise SystemExit('Expected recipe validation block was not found; aborting without changes.')
+          app = app.replace(old_validation, new_validation, 1)
+
+          app = app.replace("./sw.js?v=1230", "./sw.js?v=1231")
+          app_path.write_text(app, encoding='utf-8')
+
+          index_path = Path('index.html')
+          index = index_path.read_text(encoding='utf-8').replace('v=1230', 'v=1231')
+          index_path.write_text(index, encoding='utf-8')
+
+          sw_path = Path('sw.js')
+          sw = sw_path.read_text(encoding='utf-8').replace('bakery-workspace-v1230', 'bakery-workspace-v1231').replace('v=1230', 'v=1231')
+          sw_path.write_text(sw, encoding='utf-8')
+          PY
+
+      - name: Commit hotfix
+        shell: bash
+        run: |
+          if git diff --quiet -- app.js index.html sw.js; then
+            echo 'No changes to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.js index.html sw.js
+          git commit -m '12.5 fix recipe save flow'
+          git push origin HEAD:main
