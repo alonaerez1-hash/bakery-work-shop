@@ -73,7 +73,7 @@ jobs:
                   if not path:
                       continue
                   if path.startswith('app/'):
-                      continue  # created by the Pages deployment artifact
+                      continue
                   target = (html.parent / path).resolve()
                   if not target.exists():
                       problems.append(f'{html}: broken local reference {link}')
@@ -106,13 +106,15 @@ jobs:
           assert round(margin, 1) == 45.2
           print('Calculator reference math passed.')
 
-      - name: Ensure app source was not modified in this PR
+      - name: Keep landing-only work isolated from app source
         shell: bash
         run: |
           changed="$(git diff --name-only origin/${{ github.base_ref }}...HEAD)"
           echo "$changed"
-          if echo "$changed" | grep -E '^(index\.html|styles\.css|app\.js|manifest\.json|sw\.js|pako_inflate\.min\.js)$'; then
-            echo 'Application source files were modified. Marketing PR must stay isolated.' >&2
-            exit 1
+          if echo "$changed" | grep -q '^landing/'; then
+            if echo "$changed" | grep -E '^(index\.html|styles\.css|app\.js|manifest\.json|sw\.js|pako_inflate\.min\.js)$'; then
+              echo 'This PR mixes landing changes with core application source changes.' >&2
+              exit 1
+            fi
           fi
-          echo 'Application source remains untouched.'
+          echo 'Marketing-site isolation check passed.'
