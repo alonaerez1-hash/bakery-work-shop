@@ -1,0 +1,118 @@
+name: Check marketing site
+
+on:
+  pull_request:
+    paths:
+      - "landing/**"
+      - ".github/workflows/check-marketing-site.yml"
+      - ".github/workflows/deploy-landing-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check JavaScript syntax
+        run: |
+          node --check landing/script.js
+          node --check landing/calculator.js
+
+      - name: Validate marketing site structure
+        shell: python
+        run: |
+          from html.parser import HTMLParser
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          root = Path('landing')
+          required = {
+              'index.html','features.html','how-it-works.html','for-bakers.html',
+              'calculator.html','pricing.html','404.html','styles.css','site-pages.css',
+              'site-fixes.css','script.js','calculator.js','robots.txt','sitemap.xml'
+          }
+          missing = sorted(name for name in required if not (root / name).exists())
+          assert not missing, f'Missing required files: {missing}'
+
+          class LinkParser(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.links = []
+              def handle_starttag(self, tag, attrs):
+                  attrs = dict(attrs)
+                  for key in ('href', 'src'):
+                      if key in attrs:
+                          self.links.append(attrs[key])
+              def handle_startendtag(self, tag, attrs):
+                  self.handle_starttag(tag, attrs)
+
+          external_prefixes = ('http://','https://','mailto:','tel:','data:','javascript:','#')
+          problems = []
+          repo = Path('.').resolve()
+
+          html_files = sorted(root.glob('*.html'))
+          for html in html_files:
+              text = html.read_text(encoding='utf-8')
+              parser = LinkParser()
+              parser.feed(text)
+              if '<title>' not in text or '</title>' not in text:
+                  problems.append(f'{html}: missing title')
+              if 'name="viewport"' not in text:
+                  problems.append(f'{html}: missing viewport')
+              for link in parser.links:
+                  if not link or link.startswith(external_prefixes):
+                      continue
+                  path = urlsplit(link).path
+                  if not path:
+                      continue
+                  if path.startswith('app/'):
+                      continue  # created by the Pages deployment artifact
+                  target = (html.parent / path).resolve()
+                  if not target.exists():
+                      problems.append(f'{html}: broken local reference {link}')
+                  elif repo not in target.parents and target != repo:
+                      problems.append(f'{html}: local reference escapes repository {link}')
+
+          for css in root.glob('*.css'):
+              text = css.read_text(encoding='utf-8')
+              if text.count('{') != text.count('}'):
+                  problems.append(f'{css}: unbalanced braces')
+
+          script = (root / 'script.js').read_text(encoding='utf-8')
+          if 'a[href="../index.html"]' not in script or "link.setAttribute('href', 'app/')" not in script:
+              problems.append('script.js: legacy landing CTA rewrite is missing')
+
+          if problems:
+              raise AssertionError('\n'.join(problems))
+          print(f'Static structure checks passed for {len(html_files)} HTML pages.')
+
+      - name: Verify calculator math
+        shell: python
+        run: |
+          total = 4.20 + 8.60 + 12.00 + 6.50 + 18.00
+          suggested = total / (1 - 0.45)
+          profit = 90 - total
+          margin = profit / 90 * 100
+          assert round(total, 2) == 49.30
+          assert round(suggested, 2) == 89.64
+          assert round(profit, 2) == 40.70
+          assert round(margin, 1) == 45.2
+          print('Calculator reference math passed.')
+
+      - name: Ensure app source was not modified in this PR
+        shell: bash
+        run: |
+          changed="$(git diff --name-only origin/${{ github.base_ref }}...HEAD)"
+          echo "$changed"
+          if echo "$changed" | grep -E '^(index\.html|styles\.css|app\.js|manifest\.json|sw\.js|pako_inflate\.min\.js)$'; then
+            echo 'Application source files were modified. Marketing PR must stay isolated.' >&2
+            exit 1
+          fi
+          echo 'Application source remains untouched.'

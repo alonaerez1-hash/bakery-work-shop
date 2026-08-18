@@ -1,10 +1,16 @@
-name: Deploy landing page to GitHub Pages
+name: Deploy Bakery OS marketing site
 
 on:
   push:
     branches: ["main"]
     paths:
       - "landing/**"
+      - "index.html"
+      - "styles.css"
+      - "app.js"
+      - "manifest.json"
+      - "sw.js"
+      - "pako_inflate.min.js"
       - ".github/workflows/deploy-landing-pages.yml"
   workflow_dispatch:
 
@@ -30,10 +36,37 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload landing page artifact
+      - name: Prepare isolated Pages artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf _site
+          mkdir -p _site/app
+
+          # Marketing website becomes the Pages root.
+          cp -R landing/. _site/
+
+          # The app source stays untouched in the repository. Deployment only copies
+          # the existing files into /app/ so marketing CTAs have a working destination.
+          cp index.html _site/app/index.html
+          cp styles.css _site/app/styles.css
+          cp app.js _site/app/app.js
+          cp manifest.json _site/app/manifest.json
+          cp sw.js _site/app/sw.js
+          cp pako_inflate.min.js _site/app/pako_inflate.min.js
+
+          test -f _site/index.html
+          test -f _site/features.html
+          test -f _site/how-it-works.html
+          test -f _site/for-bakers.html
+          test -f _site/calculator.html
+          test -f _site/pricing.html
+          test -f _site/app/index.html
+
+      - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
-          path: ./landing
+          path: ./_site
 
       - name: Deploy to GitHub Pages
         id: deployment
