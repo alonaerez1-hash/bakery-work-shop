@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://alonaerez1-hash.github.io/bakery-work-shop/sitemap.xml
