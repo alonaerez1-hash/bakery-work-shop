@@ -11,6 +11,9 @@ on:
       - "manifest.json"
       - "sw.js"
       - "pako_inflate.min.js"
+      - "profitability-core.js"
+      - "profitability-v1.js"
+      - "profitability-v1.css"
       - ".github/workflows/deploy-landing-pages.yml"
   workflow_dispatch:
 
@@ -43,17 +46,17 @@ jobs:
           rm -rf _site
           mkdir -p _site/app
 
-          # Marketing website becomes the Pages root.
           cp -R landing/. _site/
 
-          # The app source stays untouched in the repository. Deployment only copies
-          # the existing files into /app/ so marketing CTAs have a working destination.
           cp index.html _site/app/index.html
           cp styles.css _site/app/styles.css
           cp app.js _site/app/app.js
           cp manifest.json _site/app/manifest.json
           cp sw.js _site/app/sw.js
           cp pako_inflate.min.js _site/app/pako_inflate.min.js
+          cp profitability-core.js _site/app/profitability-core.js
+          cp profitability-v1.js _site/app/profitability-v1.js
+          cp profitability-v1.css _site/app/profitability-v1.css
 
           test -f _site/index.html
           test -f _site/features.html
@@ -62,6 +65,9 @@ jobs:
           test -f _site/calculator.html
           test -f _site/pricing.html
           test -f _site/app/index.html
+          test -f _site/app/profitability-core.js
+          test -f _site/app/profitability-v1.js
+          test -f _site/app/profitability-v1.css
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
@@ -80,7 +86,6 @@ jobs:
           set -euo pipefail
           test -n "$SITE_URL"
           echo "Verifying $SITE_URL"
-
           success=0
           for attempt in $(seq 1 18); do
             body="$(curl -fsSL --max-time 20 "$SITE_URL" || true)"
@@ -91,14 +96,13 @@ jobs:
             echo "Marketing site not ready yet (attempt $attempt/18)."
             sleep 10
           done
-
           if [ "$success" -ne 1 ]; then
             echo "Public marketing site failed smoke test: $SITE_URL" >&2
             curl -I --max-time 20 "$SITE_URL" || true
             exit 1
           fi
 
-      - name: Verify public app route
+      - name: Verify public app route and profitability module
         shell: bash
         env:
           SITE_URL: ${{ steps.deployment.outputs.page_url }}
@@ -106,20 +110,20 @@ jobs:
           set -euo pipefail
           APP_URL="${SITE_URL%/}/app/"
           echo "Verifying $APP_URL"
-
           success=0
           for attempt in $(seq 1 12); do
             body="$(curl -fsSL --max-time 20 "$APP_URL" || true)"
-            if printf '%s' "$body" | grep -q 'Bakery Workspace'; then
+            core="$(curl -fsSL --max-time 20 "${APP_URL}profitability-core.js?v=1" || true)"
+            ui="$(curl -fsSL --max-time 20 "${APP_URL}profitability-v1.js?v=1" || true)"
+            if printf '%s' "$body" | grep -q 'Bakery Workspace' && printf '%s' "$body" | grep -q 'profitability-v1.js' && printf '%s' "$core" | grep -q 'recipeTrueCost' && printf '%s' "$ui" | grep -q 'PROFITABILITY ENGINE'; then
               success=1
               break
             fi
-            echo "App route not ready yet (attempt $attempt/12)."
+            echo "App profitability module not ready yet (attempt $attempt/12)."
             sleep 10
           done
-
           if [ "$success" -ne 1 ]; then
-            echo "Public app route failed smoke test: $APP_URL" >&2
+            echo "Public app profitability smoke test failed: $APP_URL" >&2
             curl -I --max-time 20 "$APP_URL" || true
             exit 1
           fi

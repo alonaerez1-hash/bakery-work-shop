@@ -1,0 +1,82 @@
+name: Check profitability engine
+
+on:
+  pull_request:
+    paths:
+      - "index.html"
+      - "profitability-core.js"
+      - "profitability-v1.js"
+      - "profitability-v1.css"
+      - "sw.js"
+      - ".github/workflows/deploy-landing-pages.yml"
+      - ".github/workflows/check-profitability-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check JavaScript syntax
+        run: |
+          node --check profitability-core.js
+          node --check profitability-v1.js
+
+      - name: Verify true-cost and order-profit math
+        run: |
+          node <<'NODE'
+          const assert=require('assert');
+          const Core=require('./profitability-core.js');
+          const state={
+            settings:{currency:'₪'},
+            suppliers:[{name:'Supplier',prices:[{ingredient:'Flour',packQty:1,unit:'ק"ג',packPrice:10}]}],
+            recipes:[{id:'r1',name:'Cake',salesUnit:'יחידות',yieldUnits:10,salePrice:20,prepMin:60,wastePct:0,ingredients:[{name:'Flour',qty:1000,unit:'גרם'}],productionTasks:[]}],
+            orders:[{id:'o1',customer:'Test',status:'מאושרת',items:[{recipeId:'r1',qty:2}]}]
+          };
+          const meta={settings:{hourlyRate:60,overheadPerHour:30,targetMargin:50,defaultPackagingPerUnit:2},recipes:{},orders:{o1:{deliveryCharge:5,discount:3,extraCost:4}}};
+          const cost=Core.recipeTrueCost(state,meta,state.recipes[0]);
+          assert.strictEqual(cost.ingredients,10);
+          assert.strictEqual(cost.labor,60);
+          assert.strictEqual(cost.packaging,20);
+          assert.strictEqual(cost.overhead,30);
+          assert.strictEqual(cost.total,120);
+          assert.strictEqual(cost.perUnit,12);
+          assert.strictEqual(cost.suggestedPrice,24);
+          assert.strictEqual(Math.round(cost.margin*10)/10,40);
+          const order=Core.orderProfitability(state,meta,state.orders[0]);
+          assert.strictEqual(order.revenue,42);
+          assert.strictEqual(order.cost,28);
+          assert.strictEqual(order.profit,14);
+          assert.strictEqual(Math.round(order.margin*10)/10,33.3);
+          console.log('True-cost reference scenario passed.');
+          NODE
+
+      - name: Verify missing-price behavior
+        run: |
+          node <<'NODE'
+          const assert=require('assert');
+          const Core=require('./profitability-core.js');
+          const state={suppliers:[],recipes:[]};
+          const recipe={id:'x',name:'Missing',salesUnit:'יחידות',yieldUnits:1,salePrice:10,ingredients:[{name:'Unknown ingredient',qty:1,unit:'יחידה'}]};
+          const cost=Core.recipeTrueCost(state,{settings:{}},recipe);
+          assert.deepStrictEqual(cost.missing,['Unknown ingredient']);
+          assert.strictEqual(cost.ingredients,0);
+          console.log('Missing-price warning behavior passed.');
+          NODE
+
+      - name: Verify app shell and deploy include profitability assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'data-view="profitability"' index.html
+          grep -q 'id="view-profitability"' index.html
+          grep -q 'profitability-core.js?v=1' index.html
+          grep -q 'profitability-v1.js?v=1' index.html
+          grep -q 'profitability-v1.css?v=1' index.html
+          grep -q 'cp profitability-core.js _site/app/profitability-core.js' .github/workflows/deploy-landing-pages.yml
+          grep -q 'cp profitability-v1.js _site/app/profitability-v1.js' .github/workflows/deploy-landing-pages.yml
+          grep -q 'cp profitability-v1.css _site/app/profitability-v1.css' .github/workflows/deploy-landing-pages.yml

@@ -1,5 +1,5 @@
-const CACHE='bakery-workspace-v1234';
-const CORE=['./index.html','./styles.css?v=1234','./app.js?v=1234','./manifest.json?v=1234','./pako_inflate.min.js?v=1234'];
+const CACHE='bakery-workspace-v1300';
+const CORE=['./index.html','./styles.css?v=1234','./app.js?v=1234','./manifest.json?v=1234','./pako_inflate.min.js?v=1234','./profitability-core.js?v=1','./profitability-v1.js?v=1','./profitability-v1.css?v=1'];
 
 self.addEventListener('install',event=>{
   event.waitUntil((async()=>{
