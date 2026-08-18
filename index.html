@@ -12,6 +12,7 @@
 <title>Bakery Workspace — Luxury Bakery Studio</title>
 <link rel="manifest" href="manifest.json?v=1234">
 <link rel="stylesheet" href="styles.css?v=1234">
+<link rel="stylesheet" href="profitability-v1.css?v=1">
 </head>
 <body>
 <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
@@ -31,6 +32,7 @@
   <button data-view="shopping"><span>⌑</span>קניות</button>
   <button data-view="inventory"><span>▣</span>מלאי</button>
   <button data-view="suppliers"><span>⌁</span>ספקים ומחירים</button>
+  <button data-view="profitability"><span>◉</span>רווחיות</button>
   <button data-view="reports"><span>↗</span>דוחות</button>
   <button data-view="settings"><span>⚙</span>הגדרות</button>
   <button data-view="invoices"><span>▧</span>חשבוניות</button>
@@ -47,6 +49,7 @@
   <section class="view" id="view-shopping"></section>
   <section class="view" id="view-inventory"></section>
   <section class="view" id="view-suppliers"></section>
+  <section class="view" id="view-profitability"></section>
   <section class="view" id="view-reports"></section>
   <section class="view" id="view-todo"></section>
   <section class="view" id="view-settings"></section>
@@ -59,5 +62,7 @@
 <script src="pako_inflate.min.js?v=1234"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="app.js?v=1234"></script>
+<script src="profitability-core.js?v=1"></script>
+<script src="profitability-v1.js?v=1"></script>
 </body>
 </html>
