@@ -71,3 +71,55 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Verify public marketing site
+        shell: bash
+        env:
+          SITE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          set -euo pipefail
+          test -n "$SITE_URL"
+          echo "Verifying $SITE_URL"
+
+          success=0
+          for attempt in $(seq 1 18); do
+            body="$(curl -fsSL --max-time 20 "$SITE_URL" || true)"
+            if printf '%s' "$body" | grep -q 'Run a bakery that' && printf '%s' "$body" | grep -q 'Bakery OS'; then
+              success=1
+              break
+            fi
+            echo "Marketing site not ready yet (attempt $attempt/18)."
+            sleep 10
+          done
+
+          if [ "$success" -ne 1 ]; then
+            echo "Public marketing site failed smoke test: $SITE_URL" >&2
+            curl -I --max-time 20 "$SITE_URL" || true
+            exit 1
+          fi
+
+      - name: Verify public app route
+        shell: bash
+        env:
+          SITE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          set -euo pipefail
+          APP_URL="${SITE_URL%/}/app/"
+          echo "Verifying $APP_URL"
+
+          success=0
+          for attempt in $(seq 1 12); do
+            body="$(curl -fsSL --max-time 20 "$APP_URL" || true)"
+            if printf '%s' "$body" | grep -q 'Bakery Workspace'; then
+              success=1
+              break
+            fi
+            echo "App route not ready yet (attempt $attempt/12)."
+            sleep 10
+          done
+
+          if [ "$success" -ne 1 ]; then
+            echo "Public app route failed smoke test: $APP_URL" >&2
+            curl -I --max-time 20 "$APP_URL" || true
+            exit 1
+          fi
