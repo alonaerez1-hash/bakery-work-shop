@@ -3,6 +3,15 @@ const menuToggle = document.querySelector('.menu-toggle');
 const nav = document.querySelector('.nav-links');
 const currentPage = document.body?.dataset?.page || 'home';
 
+// Load a final, tiny stylesheet after the original landing styles so the
+// expanded multi-page navigation remains stable at tablet widths too.
+if (!document.querySelector('link[href="site-fixes.css"]')) {
+  const fixes = document.createElement('link');
+  fixes.rel = 'stylesheet';
+  fixes.href = 'site-fixes.css';
+  document.head.appendChild(fixes);
+}
+
 const navigation = [
   { key: 'how', href: 'how-it-works.html', label: 'How it works' },
   { key: 'features', href: 'features.html', label: 'Features' },
