@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Free bakery pricing calculator for estimating recipe cost, selling price, profit and margin.">
+  <meta name="theme-color" content="#f7f1e9"><title>Free Bakery Pricing Calculator — Bakery OS</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="site-pages.css">
+</head>
+<body class="site-page" data-page="calculator">
+  <div class="announcement">Free tool · Estimate your bakery costs before you quote the next order.</div>
+  <header class="site-header"><a class="brand" href="index.html"><span class="brand-mark">B</span><span>Bakery OS</span></a><nav class="nav-links" aria-label="Main navigation"></nav><div class="nav-actions"><a class="text-link" href="app/">Log in</a><a class="button button-small" href="app/">Start free</a></div><button class="menu-toggle" aria-label="Open menu" aria-expanded="false">☰</button></header>
+
+  <main>
+    <section class="page-hero"><span class="eyebrow reveal">FREE BAKERY PRICING CALCULATOR</span><h1 class="reveal">What does this order <em>actually cost you?</em></h1><p class="reveal">Add ingredient costs, packaging, labor and overhead. The calculator estimates your total cost, a selling price based on your target margin, and the profit on your own selling price.</p></section>
+
+    <section class="page-shell soft">
+      <div class="calculator-wrap reveal">
+        <div class="calculator-card">
+          <div class="calc-section"><h3>1. Ingredient costs</h3><p style="color:var(--muted);margin-bottom:12px">Enter the cost of the amount you actually use in this recipe or order.</p><div id="ingredientRows">
+            <div class="ingredient-row"><div class="field"><label>Ingredient</label><input type="text" value="Flour" aria-label="Ingredient name"></div><div class="field"><label>Cost</label><input class="ingredient-cost" type="number" min="0" step="0.01" value="4.20" aria-label="Ingredient cost"></div><button class="remove-row" type="button" aria-label="Remove ingredient">×</button></div>
+            <div class="ingredient-row"><div class="field"><label>Ingredient</label><input type="text" value="Butter" aria-label="Ingredient name"></div><div class="field"><label>Cost</label><input class="ingredient-cost" type="number" min="0" step="0.01" value="8.60" aria-label="Ingredient cost"></div><button class="remove-row" type="button" aria-label="Remove ingredient">×</button></div>
+            <div class="ingredient-row"><div class="field"><label>Ingredient</label><input type="text" value="Chocolate" aria-label="Ingredient name"></div><div class="field"><label>Cost</label><input class="ingredient-cost" type="number" min="0" step="0.01" value="12.00" aria-label="Ingredient cost"></div><button class="remove-row" type="button" aria-label="Remove ingredient">×</button></div>
+          </div><button id="addIngredient" class="add-row" type="button">+ Add ingredient</button></div>
+
+          <div class="calc-section"><h3>2. Other costs</h3><div class="calc-two"><div class="field"><label for="packaging">Packaging</label><input id="packaging" type="number" min="0" step="0.01" value="6.50"></div><div class="field"><label for="labor">Labor</label><input id="labor" type="number" min="0" step="0.01" value="18.00"></div><div class="field"><label for="overhead">Other / overhead</label><input id="overhead" type="number" min="0" step="0.01" value="0"></div><div class="field"><label for="targetMargin">Target profit margin %</label><input id="targetMargin" type="number" min="0" max="99" step="1" value="45"></div></div></div>
+
+          <div class="calc-section"><h3>3. Your selling price</h3><div class="field"><label for="sellingPrice">Selling price you are considering</label><input id="sellingPrice" type="number" min="0" step="0.01" value="90"></div></div>
+        </div>
+
+        <aside class="results-card" aria-live="polite"><div class="panel-label" style="color:#aeb9b5">YOUR ESTIMATE</div><h2 style="font-size:36px;margin-bottom:8px">Pricing snapshot</h2><p>Based only on the numbers entered on this page.</p><div class="result-line"><span>Ingredients</span><strong id="resultIngredients">$24.80</strong></div><div class="result-line"><span>Total cost</span><strong id="resultCost">$49.30</strong></div><div class="result-line total"><span>Suggested price</span><strong id="resultSuggested">$89.64</strong></div><div class="result-line"><span>Profit at your price</span><strong id="resultProfit">$40.70</strong></div><div class="result-line"><span>Margin at your price</span><strong id="resultMargin">45.2%</strong></div><p class="result-note">This calculator is an estimate, not accounting or financial advice. Taxes, waste, payment fees and other business costs may not be included unless you enter them.</p><a class="button button-light full" href="app/" style="margin-top:8px">Save more inside Bakery OS →</a></aside>
+      </div>
+    </section>
+
+    <section class="page-shell"><div class="center-copy reveal"><span class="eyebrow">WHY COSTING MATTERS</span><h2>A popular product can still be underpriced.</h2><p>Ingredient cost is only one part of the picture. Packaging, labor and operating costs can change what looks profitable into work that barely pays.</p></div><div class="detail-grid reveal"><article class="detail-card"><div class="icon">01</div><h3>Ingredients</h3><p>Use the cost of the quantity consumed by the recipe, not the full package price unless the whole package is used.</p></article><article class="detail-card"><div class="icon">02</div><h3>Packaging</h3><p>Boards, boxes, ribbons, labels and presentation materials are part of the cost of delivering the order.</p></article><article class="detail-card"><div class="icon">03</div><h3>Labor</h3><p>Your time has a cost. Include preparation, baking, decorating, packing and other work you want reflected in the estimate.</p></article><article class="detail-card"><div class="icon">04</div><h3>Overhead</h3><p>Use the other-cost field for expenses you want included in this estimate, such as utilities, fees or allocated overhead.</p></article></div></section>
+
+    <section class="site-cta"><span class="eyebrow">FROM ONE CALCULATION TO A SYSTEM</span><h2>Costing is more useful when it connects to the order.</h2><p>Bakery OS brings recipes, orders, production, stock and profitability into one workspace.</p><div class="hero-actions"><a class="button button-primary" href="app/">Start for free <span>→</span></a><a class="button button-secondary" href="features.html">Explore Bakery OS</a></div></section>
+  </main>
+
+  <footer class="site-footer"><div><a class="footer-brand" href="index.html"><span class="brand-mark">B</span><span>Bakery OS</span></a><p>Run your bakery with clearer systems and better numbers.</p></div><div class="footer-links"><a href="features.html">Features</a><a href="how-it-works.html">How it works</a><a href="for-bakers.html">For bakers</a><a href="calculator.html">Free calculator</a><a href="pricing.html">Pricing</a></div></footer>
+  <script src="script.js"></script><script src="calculator.js"></script>
+</body>
+</html>
